@@ -1,0 +1,68 @@
+import { z } from "zod";
+
+/**
+ * Central, validated view of the environment. Everything that affects money
+ * (caps, kill switch, auto-buy) is read from here so there is exactly one
+ * place to audit.
+ */
+
+const bool = (def: boolean) =>
+  z
+    .string()
+    .optional()
+    .transform((v) => (v === undefined || v === "" ? def : ["1", "true", "yes", "on"].includes(v.toLowerCase())));
+
+const dollars = (def: number) =>
+  z
+    .string()
+    .optional()
+    .transform((v) => (v === undefined || v === "" ? def : Number(v)))
+    .pipe(z.number().nonnegative());
+
+const schema = z.object({
+  NODE_ENV: z.string().default("development"),
+  DATABASE_URL: z.string().default("pglite:./.data/pglite"),
+  APP_PASSWORD: z.string().default(""),
+  APP_BASE_URL: z.string().default("http://localhost:3000"),
+  ANTHROPIC_API_KEY: z.string().default(""),
+  ANTHROPIC_MODEL: z.string().default("claude-sonnet-5"),
+  STRAVA_CLIENT_ID: z.string().default(""),
+  STRAVA_CLIENT_SECRET: z.string().default(""),
+  STRAVA_WEBHOOK_VERIFY_TOKEN: z.string().default(""),
+  CROSSMINT_API_KEY: z.string().default(""),
+  CROSSMINT_BASE_URL: z.string().default("https://www.crossmint.com"),
+  RYE_API_KEY: z.string().default(""),
+  RYE_BASE_URL: z.string().default("https://staging.api.rye.com"),
+  NTFY_SERVER: z.string().default("https://ntfy.sh"),
+  NTFY_TOPIC: z.string().default(""),
+  NTFY_TOKEN: z.string().default(""),
+  APPROVAL_SIGNING_SECRET: z.string().default(""),
+  TOKEN_ENCRYPTION_KEY: z.string().default(""),
+  CHECKOUT_PROVIDER: z.enum(["mock", "crossmint", "rye"]).default("mock"),
+  PURCHASES_ENABLED: bool(false),
+  AUTO_BUY: bool(false),
+  DEMO_TOOLS_ENABLED: bool(true),
+  MAX_ORDER_CAD: dollars(40),
+  MAX_DAILY_CAD: dollars(60),
+  MAX_WEEKLY_CAD: dollars(100),
+  AUTO_BUY_MAX_CAD: dollars(15),
+  MAX_RUN_SPEED_KMH: dollars(20),
+});
+
+export type AppConfig = z.infer<typeof schema>;
+
+let cached: AppConfig | null = null;
+
+export function config(): AppConfig {
+  if (!cached) cached = schema.parse(process.env);
+  return cached;
+}
+
+/** Tests mutate process.env and call this to pick up the change. */
+export function resetConfigCache() {
+  cached = null;
+}
+
+export const CURRENCY = "CAD" as const;
+
+export { TIERS, TIER_MAX_CENTS, tierAllows, type Tier } from "./tiers";
