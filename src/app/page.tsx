@@ -5,7 +5,9 @@ import { activities, goals, rewardEvents, wishlistItems } from "@/db/schema";
 import { AppShell, TierPill } from "@/components/AppShell";
 import { getEffectiveSettings, getUser } from "@/lib/settings";
 import { budgetStatus, runStreakDays, weeklyDistanceM } from "@/lib/stats";
-import { formatCad, formatKm } from "@/lib/format";
+import { formatCad, formatKm, formatPace } from "@/lib/format";
+import { config } from "@/lib/config";
+import { SimulateRun } from "./SimulateRun";
 
 export const dynamic = "force-dynamic";
 
@@ -15,7 +17,7 @@ export default async function Home() {
   const now = new Date();
   const tz = user.timezone;
 
-  const [weekM, streak, budget, activeGoals, latest] = await Promise.all([
+  const [weekM, streak, budget, activeGoals, latest, recent] = await Promise.all([
     weeklyDistanceM(db, now, tz),
     runStreakDays(db, now, tz),
     budgetStatus(db, s, now, tz),
@@ -27,7 +29,14 @@ export default async function Home() {
       .leftJoin(wishlistItems, eq(rewardEvents.chosenItemId, wishlistItems.id))
       .orderBy(desc(rewardEvents.createdAt))
       .limit(1),
+    db
+      .select({ activity: activities, rewardId: rewardEvents.id, rewardStatus: rewardEvents.status })
+      .from(activities)
+      .leftJoin(rewardEvents, eq(rewardEvents.activityId, activities.id))
+      .orderBy(desc(activities.startTime))
+      .limit(8),
   ]);
+  const demo = config().DEMO_TOOLS_ENABLED;
 
   const weeklyGoal = activeGoals.find((g) => g.type === "weekly_distance");
   const last = latest[0];
@@ -89,9 +98,39 @@ export default async function Home() {
           ) : (
             <div className="card text-muted">No rewards yet. Go for a run!</div>
           )}
+
+          <h2 className="mb-4 mt-8 text-lg font-semibold">Recent activities</h2>
+          <div className="divide-y divide-line overflow-hidden rounded-2xl border border-line bg-surface">
+            {recent.map(({ activity: a, rewardId, rewardStatus }) => (
+              <div key={a.id} className="flex flex-wrap items-center justify-between gap-3 px-5 py-3">
+                <div className="min-w-0">
+                  <p className="truncate font-semibold">
+                    {a.name || a.sportType}
+                    {a.source === "simulated" && <span className="pill ml-2 text-muted">demo</span>}
+                  </p>
+                  <p className="text-sm text-muted tabular-nums">
+                    {a.sportType} · {formatKm(a.distanceM, 2)} · {formatPace(a.movingTimeS, a.distanceM)} ·{" "}
+                    {a.startTime.toLocaleDateString("en-CA", { timeZone: tz, month: "short", day: "numeric" })}
+                  </p>
+                </div>
+                {a.flagged ? (
+                  <span className="pill border-bad/50 text-bad" title={a.flagReason ?? ""}>flagged</span>
+                ) : rewardId ? (
+                  <Link href={`/rewards/${rewardId}`} className="pill border-volt/40 text-volt">
+                    {rewardStatus?.replace("_", " ")}
+                  </Link>
+                ) : (
+                  <span className="pill text-muted">no reward</span>
+                )}
+              </div>
+            ))}
+            {recent.length === 0 && <p className="px-5 py-4 text-muted">No activities yet.</p>}
+          </div>
         </section>
 
-        <section className="lg:col-span-2">
+        <section className="space-y-8 lg:col-span-2">
+          {demo && <SimulateRun quests={activeGoals.filter((g) => g.type === "quest").map((g) => ({ id: g.id, name: g.name }))} />}
+          <div>
           <h2 className="mb-4 text-lg font-semibold">Active goals</h2>
           <div className="divide-y divide-line overflow-hidden rounded-2xl border border-line bg-surface">
             {activeGoals.map((g) => (
@@ -110,6 +149,7 @@ export default async function Home() {
                 No active goals. <Link href="/goals" className="text-volt underline">Add one</Link>.
               </p>
             )}
+          </div>
           </div>
         </section>
       </div>

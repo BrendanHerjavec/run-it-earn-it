@@ -12,7 +12,8 @@
     "test:watch": "vitest",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx scripts/db.ts migrate",
-    "db:seed": "tsx scripts/db.ts seed"
+    "db:seed": "tsx scripts/db.ts seed",
+    "strava:webhook": "tsx scripts/strava-webhook.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.128.0",

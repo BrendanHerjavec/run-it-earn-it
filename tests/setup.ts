@@ -1,0 +1,20 @@
+// Deterministic env for every test file. Real providers and keys are never set here.
+Object.assign(process.env, {
+  NODE_ENV: "test",
+  DATABASE_URL: "pglite:memory",
+  APP_PASSWORD: "test-password",
+  APPROVAL_SIGNING_SECRET: "test-signing-secret",
+  TOKEN_ENCRYPTION_KEY: "test-encryption-key",
+  STRAVA_WEBHOOK_VERIFY_TOKEN: "test-verify",
+  CHECKOUT_PROVIDER: "mock",
+  PURCHASES_ENABLED: "false",
+  AUTO_BUY: "false",
+  MAX_ORDER_CAD: "40",
+  MAX_DAILY_CAD: "60",
+  MAX_WEEKLY_CAD: "100",
+  AUTO_BUY_MAX_CAD: "15",
+  MAX_RUN_SPEED_KMH: "20",
+  ANTHROPIC_API_KEY: "",
+  CROSSMINT_API_KEY: "",
+  NTFY_TOPIC: "",
+});
