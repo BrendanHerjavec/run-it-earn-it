@@ -26,7 +26,18 @@ pending_agent → awaiting_approval → approved → checking_out → completed
    failed          rejected (Skip)                 failed
 ```
 
-## Strava setup
+## COROS setup (recommended source of runs)
+
+Strava's API needs a paid Strava subscription since June 2026, so runs come from **COROS's official MCP server** by default. It's free and needs no developer approval.
+
+1. **Settings → Connect COROS**, then sign in on COROS's own page. The app registers itself as an OAuth client automatically (PKCE, no secret) and stores only an encrypted token. Your COROS password never touches this app.
+2. New runs are found by **polling** (COROS has no webhooks for personal apps):
+   - While the home dashboard is open, it checks every minute. There's also a **Check now** button.
+   - For when the dashboard is closed, point a free external scheduler (e.g. [cron-job.org](https://cron-job.org)) at `POST https://YOUR-APP/api/coros/poll` every 1–2 minutes, with header `Authorization: Bearer <CRON_SECRET>`. Vercel's free cron only runs daily.
+3. Each new run's FIT file (full GPS, so quests work) is downloaded and sent through the same pipeline as Strava. COROS allows 50 FIT downloads a day; past that, the run is still counted from its summary, without GPS.
+4. The first sync after connecting records a starting point: runs from before you connected never earn rewards.
+
+## Strava setup (optional, needs a Strava subscription)
 
 1. Go to https://www.strava.com/settings/api and create an app. Set **Authorization Callback Domain** to `localhost` for local dev, or your Vercel domain in production.
 2. Put the Client ID and Client Secret in `.env.local` (`STRAVA_CLIENT_ID`, `STRAVA_CLIENT_SECRET`).

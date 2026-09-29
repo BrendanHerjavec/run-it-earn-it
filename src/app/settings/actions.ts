@@ -72,3 +72,11 @@ export async function disconnectStrava() {
   await db.update(users).set({ stravaAthleteId: null, stravaTokensEnc: null }).where(eq(users.id, user.id));
   revalidatePath("/settings");
 }
+
+export async function disconnectCoros() {
+  await requireAuth();
+  const db = await getDb();
+  const user = await getUser(db);
+  await db.update(users).set({ corosTokensEnc: null, corosConnectedAt: null }).where(eq(users.id, user.id));
+  revalidatePath("/settings");
+}

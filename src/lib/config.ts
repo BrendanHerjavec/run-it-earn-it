@@ -47,6 +47,7 @@ const schema = z.object({
   MAX_WEEKLY_CAD: dollars(100),
   AUTO_BUY_MAX_CAD: dollars(15),
   MAX_RUN_SPEED_KMH: dollars(20),
+  CRON_SECRET: z.string().default(""),
 });
 
 export type AppConfig = z.infer<typeof schema>;

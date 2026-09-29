@@ -3,13 +3,15 @@ import { SESSION_COOKIE, verifySessionToken } from "@/lib/auth";
 
 /**
  * Paths reachable without the app password. Each one authenticates itself:
- * the Strava webhook with its verify token + athlete check, and the reward
+ * the Strava webhook with its verify token + athlete check, the COROS poll
+ * with a session or CRON_SECRET, and the reward
  * approve/skip links with a signed single-use token.
  */
 const PUBLIC = [
   /^\/login$/,
   /^\/api\/auth\//,
   /^\/api\/strava\/webhook$/,
+  /^\/api\/coros\/poll$/,
   /^\/api\/rewards\/\d+\/(approve|skip)$/,
 ];
 

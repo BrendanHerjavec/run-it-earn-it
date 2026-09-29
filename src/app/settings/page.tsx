@@ -3,7 +3,7 @@ import { config } from "@/lib/config";
 import { getEffectiveSettings, getUser } from "@/lib/settings";
 import { formatCad } from "@/lib/format";
 import { LimitsForm, ProfileForm } from "./SettingsForms";
-import { disconnectStrava } from "./actions";
+import { disconnectCoros, disconnectStrava } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -17,8 +17,8 @@ function Flag({ on, label, dangerWhenOn }: { on: boolean; label: string; dangerW
   );
 }
 
-export default async function SettingsPage({ searchParams }: { searchParams: Promise<{ strava?: string }> }) {
-  const [s, user, { strava }] = await Promise.all([getEffectiveSettings(), getUser(), searchParams]);
+export default async function SettingsPage({ searchParams }: { searchParams: Promise<{ strava?: string; coros?: string }> }) {
+  const [s, user, { strava, coros }] = await Promise.all([getEffectiveSettings(), getUser(), searchParams]);
   const c = config();
 
   return (
@@ -64,7 +64,29 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
         </section>
 
         <section className="card">
-          <h2 className="mb-1 text-lg font-semibold">Strava</h2>
+          <h2 className="mb-1 text-lg font-semibold">COROS</h2>
+          <p className="mb-3 text-sm text-muted">
+            Runs come from your COROS account through COROS&apos;s official MCP server. Free, no developer approval. New runs are picked up by polling.
+          </p>
+          {coros === "connected" && <p className="mb-2 text-sm text-good">COROS connected.</p>}
+          {coros === "error" && <p className="mb-2 text-sm text-bad">COROS connection failed. Check the event log.</p>}
+          {user.corosTokensEnc ? (
+            <div className="flex flex-wrap items-center gap-4">
+              <p className="text-muted">
+                Connected {user.corosConnectedAt?.toLocaleDateString("en-CA", { timeZone: user.timezone })}
+              </p>
+              <a href="/api/coros/connect" className="btn">Reconnect</a>
+              <form action={disconnectCoros}>
+                <button className="btn-danger">Disconnect</button>
+              </form>
+            </div>
+          ) : (
+            <a href="/api/coros/connect" className="btn-primary">Connect COROS</a>
+          )}
+        </section>
+
+        <section className="card">
+          <h2 className="mb-1 text-lg font-semibold">Strava <span className="text-sm font-normal text-muted">(needs a Strava subscription since June 2026)</span></h2>
           {strava === "connected" && <p className="mb-2 text-sm text-good">Strava connected.</p>}
           {strava === "error" && <p className="mb-2 text-sm text-bad">Strava connection failed. Check the server logs.</p>}
           {user.stravaAthleteId ? (

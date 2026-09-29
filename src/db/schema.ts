@@ -50,6 +50,11 @@ export const users = pgTable("users", {
   stravaAthleteId: bigint("strava_athlete_id", { mode: "number" }),
   /** AES-256-GCM encrypted JSON of { accessToken, refreshToken, expiresAt }. */
   stravaTokensEnc: text("strava_tokens_enc"),
+  /** AES-256-GCM encrypted JSON of COROS OAuth tokens (see src/lib/coros.ts). */
+  corosTokensEnc: text("coros_tokens_enc"),
+  corosConnectedAt: timestamp("coros_connected_at", { withTimezone: true }),
+  /** Newest COROS activity start we've seen; polling only looks after this. */
+  corosLastSeenAt: timestamp("coros_last_seen_at", { withTimezone: true }),
   ...timestamps,
 });
 
@@ -68,6 +73,9 @@ export const settings = pgTable("settings", {
   provider: text("provider").$type<"mock" | "crossmint" | "rye">(),
   crossmintBuyerProfileId: text("crossmint_buyer_profile_id"),
   crossmintPaymentMethodId: text("crossmint_payment_method_id"),
+  /** OAuth client registered dynamically with COROS for this app's redirect URI. */
+  corosClientId: text("coros_client_id"),
+  corosRedirectUri: text("coros_redirect_uri"),
   ...timestamps,
 });
 
@@ -99,9 +107,11 @@ export const activities = pgTable(
   "activities",
   {
     id: serial("id").primaryKey(),
-    /** Strava activity ID. Simulated runs use negative IDs so they can never collide. */
-    stravaId: bigint("strava_id", { mode: "number" }).notNull(),
-    source: text("source").$type<"strava" | "simulated">().notNull().default("strava"),
+    /** Strava activity ID. Simulated runs use negative IDs so they can never collide. Null for COROS. */
+    stravaId: bigint("strava_id", { mode: "number" }),
+    /** Source-prefixed ID for non-Strava sources, e.g. "coros:465112093187637249". */
+    externalId: text("external_id"),
+    source: text("source").$type<"strava" | "simulated" | "coros">().notNull().default("strava"),
     name: text("name").notNull().default(""),
     sportType: text("sport_type").notNull(),
     distanceM: doublePrecision("distance_m").notNull(),
@@ -114,7 +124,11 @@ export const activities = pgTable(
     raw: jsonb("raw"),
     ...timestamps,
   },
-  (t) => [uniqueIndex("activities_strava_id_uq").on(t.stravaId), index("activities_start_idx").on(t.startTime)],
+  (t) => [
+    uniqueIndex("activities_strava_id_uq").on(t.stravaId),
+    uniqueIndex("activities_external_id_uq").on(t.externalId),
+    index("activities_start_idx").on(t.startTime),
+  ],
 );
 
 export const rewardEvents = pgTable(

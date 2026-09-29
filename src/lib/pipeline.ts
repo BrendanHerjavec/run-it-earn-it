@@ -58,8 +58,12 @@ export async function handleWebhookEvent(db: DB, event: StravaWebhookEvent, deps
   return processActivity(db, activity, deps);
 }
 
-/** Insert (or find) the activity row. Safe to call repeatedly for the same Strava ID. */
-export async function storeActivity(db: DB, a: StravaActivity, source: "strava" | "simulated") {
+/**
+ * Insert (or find) the activity row. Safe to call repeatedly for the same run.
+ * Strava and simulated runs are keyed by numeric `stravaId`; other sources
+ * (COROS) pass a text `externalId` such as "coros:470000000000000001".
+ */
+export async function storeActivity(db: DB, a: StravaActivity, source: "strava" | "simulated" | "coros", externalId?: string) {
   const sanity = sanityCheck(
     { sportType: a.sport_type ?? a.type ?? "Unknown", averageSpeedMps: a.average_speed },
     config().MAX_RUN_SPEED_KMH,
@@ -67,7 +71,8 @@ export async function storeActivity(db: DB, a: StravaActivity, source: "strava" 
   const [inserted] = await db
     .insert(activities)
     .values({
-      stravaId: a.id,
+      stravaId: externalId ? null : a.id,
+      externalId: externalId ?? null,
       source,
       name: a.name ?? "",
       sportType: a.sport_type ?? a.type ?? "Unknown",
@@ -80,17 +85,20 @@ export async function storeActivity(db: DB, a: StravaActivity, source: "strava" 
       flagReason: !sanity.ok && sanity.flag ? sanity.reason : null,
       raw: a,
     })
-    .onConflictDoNothing({ target: activities.stravaId })
+    .onConflictDoNothing({ target: externalId ? activities.externalId : activities.stravaId })
     .returning();
   if (inserted) {
     await logEvent(db, {
       kind: "activity.stored",
       activityId: inserted.id,
-      message: `${source} activity ${a.id}: ${a.sport_type} ${(a.distance / 1000).toFixed(2)} km`,
+      message: `${source} activity ${externalId ?? a.id}: ${a.sport_type} ${(a.distance / 1000).toFixed(2)} km`,
     });
     return { activity: inserted, created: true };
   }
-  const [row] = await db.select().from(activities).where(eq(activities.stravaId, a.id));
+  const [row] = await db
+    .select()
+    .from(activities)
+    .where(externalId ? eq(activities.externalId, externalId) : eq(activities.stravaId, a.id));
   return { activity: row, created: false };
 }
 
