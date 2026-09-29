@@ -70,7 +70,7 @@ export const settings = pgTable("settings", {
   autoBuyMaxCents: integer("auto_buy_max_cents"),
   /** When false (default) every purchase needs a tap on Approve. Also requires AUTO_BUY env. */
   autoBuy: boolean("auto_buy").notNull().default(false),
-  provider: text("provider").$type<"mock" | "crossmint" | "rye">(),
+  provider: text("provider").$type<"mock" | "browser" | "crossmint" | "rye">(),
   crossmintBuyerProfileId: text("crossmint_buyer_profile_id"),
   crossmintPaymentMethodId: text("crossmint_payment_method_id"),
   /** OAuth client registered dynamically with COROS for this app's redirect URI. */
@@ -157,6 +157,10 @@ export const rewardEvents = pgTable(
     approvedAt: timestamp("approved_at", { withTimezone: true }),
     /** "notification" | "dashboard" | "auto" */
     approvedVia: text("approved_via"),
+    /** Created by "Sync runs": buy automatically after a short cancel countdown, no Approve tap. */
+    autoApprove: boolean("auto_approve").notNull().default(false),
+    /** When the countdown ends and the purchase starts (unless cancelled). */
+    autoApproveAt: timestamp("auto_approve_at", { withTimezone: true }),
     /** Set when an agent run claims this reward, so two agents never run for one reward. */
     agentStartedAt: timestamp("agent_started_at", { withTimezone: true }),
     /** Hard spend cap handed to the provider (and reserved in the ledger). */

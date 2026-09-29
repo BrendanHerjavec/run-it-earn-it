@@ -47,7 +47,8 @@ export async function simulateRun(_prev: SimulateState, form: FormData): Promise
 
   await logEvent(db, { kind: "demo.simulate", message: `Simulated ${input.sportType} ${input.distanceKm} km${quest ? ` via ${quest.name}` : ""}` });
   const { activity } = await storeActivity(db, fake, "simulated");
-  const outcome = await processActivity(db, activity, pipelineDeps());
+  // A simulated run behaves exactly like "Sync runs": the reward buys itself after the countdown.
+  const outcome = await processActivity(db, activity, pipelineDeps({ autoApprove: true }));
   revalidatePath("/");
   return { outcome };
 }

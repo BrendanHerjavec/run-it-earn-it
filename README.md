@@ -4,7 +4,7 @@ Finish a run that hits a goal → a Claude agent picks a reward from your wishli
 
 Single-user app. Next.js 16 (App Router) + TypeScript + Drizzle/Postgres, deployed on Vercel.
 
-> **Status:** Phases 1–3 are done. The full pipeline (Strava or Simulate run → Claude picks → phone Approve → checkout → receipt) works end to end with the **mock** checkout. Real checkout providers are Phase 4.
+> **Status:** Runs locally on your PC. Press **Sync runs** → new COROS runs are checked → if one hits a goal: unlock animation → Claude picks a reward → 10 s countdown (Cancel) → a Claude browser agent buys it in a visible Chrome window, using your store account's saved card → receipt. Dry-run mode (the default) stops before placing the order.
 
 ## How a run becomes a reward
 
@@ -49,6 +49,20 @@ npm run strava:webhook -- create https://YOUR-PUBLIC-URL/api/strava/webhook
 ```
 
 `npm run strava:webhook -- view` / `-- delete <id>` manage it. Strava allows one subscription per app.
+
+## Buying with the local browser agent
+
+`CHECKOUT_PROVIDER=browser` (or pick **Browser agent** in Settings). Claude drives Chrome through Microsoft's [Playwright MCP](https://github.com/microsoft/playwright-mcp) server, using a dedicated profile in `.data/shopping-profile`.
+
+**One-time setup:** go to **Settings → Shopping browser**, enter your store's URL and click **Open shopping browser**. In that window, sign in to the store and make sure your home address and card are saved in your account there. Close the window. Pick a store where an automation flag on your account wouldn't hurt you.
+
+**Guardrails (enforced in code, see `src/lib/browser/`):**
+
+- Navigation is restricted to the wishlist item's store (and its subdomains).
+- It never types into password, card, CVV or code fields, and never types anything shaped like a card number. If a store asks for any of those, the agent pauses, you fix it in the Chrome window, then click **Done, continue**.
+- "Place order" / "Buy now" / "Pay" clicks are blocked until the agent calls `ready_to_place_order`. The app then takes its **own** snapshot of the page and checks that the total is on the page, is in CAD, is ≤ the hard cap, and that your postal code is on the page. Only one place-order click is allowed. Any other action afterwards cancels the verification.
+- With `PURCHASES_ENABLED=false` it's a **dry run**: it verifies the total on the review page and stops. It can never place the order.
+- Only a small set of Playwright tools is exposed: no code execution, file uploads or tabs.
 
 ## Phone notifications (ntfy)
 

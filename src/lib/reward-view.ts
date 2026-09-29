@@ -23,6 +23,8 @@ export type RewardView = {
   provider: string | null;
   liveViewUrl: string | null;
   approvedVia: string | null;
+  autoApprove: boolean;
+  autoApproveAt: string | null;
   checkout: CheckoutStatus | null;
   transcript: { model: string; steps: TranscriptStep[]; usage?: { input: number; output: number } } | null;
   log: { id: number; at: string; kind: string; message: string }[];
@@ -87,6 +89,8 @@ export async function getRewardView(db: DB, id: number): Promise<RewardView | nu
     provider: e.provider,
     liveViewUrl: e.liveViewUrl,
     approvedVia: e.approvedVia,
+    autoApprove: e.autoApprove,
+    autoApproveAt: e.autoApproveAt?.toISOString() ?? null,
     checkout: (e.checkoutState as CheckoutStatus | null) ?? null,
     transcript: flattenTranscript(e.agentTranscript),
     log: log.map((l) => ({ id: l.id, at: l.createdAt.toISOString(), kind: l.kind, message: l.message })),

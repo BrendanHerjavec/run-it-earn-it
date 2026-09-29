@@ -20,8 +20,10 @@ export type Outcome =
 export type PipelineDeps = {
   /** Injected in tests; defaults to the real Strava API with the stored user tokens. */
   fetchActivity?: (db: DB, stravaId: number) => Promise<StravaActivity>;
-  /** Called after a RewardEvent is created in pending_agent. Phase 3 hangs the agent here. */
+  /** Called after a RewardEvent is created in pending_agent; production starts the agent here. */
   onRewardCreated?: (db: DB, rewardEventId: number) => Promise<void>;
+  /** "Sync runs": rewards buy automatically after a countdown instead of waiting for Approve. */
+  autoApprove?: boolean;
 };
 
 async function defaultFetch(db: DB, stravaId: number): Promise<StravaActivity> {
@@ -151,6 +153,7 @@ export async function processActivity(db: DB, activity: Activity, deps: Pipeline
       activityId: activity.id,
       goalId: hit.goal.id,
       status,
+      autoApprove: deps.autoApprove ?? false,
       failureReason: affordableInTier ? null : `No wishlist item fits: ${(ceiling / 100).toFixed(2)} CAD available for a ${hit.goal.rewardTier} reward`,
     })
     .onConflictDoNothing({ target: rewardEvents.activityId })

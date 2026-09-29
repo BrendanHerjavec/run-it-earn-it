@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useActionState, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useActionState, useEffect, useState } from "react";
 import { simulateRun, type SimulateState } from "./demo-actions";
 
 const OUTCOME_STYLE: Record<string, string> = {
@@ -16,12 +17,18 @@ const OUTCOME_STYLE: Record<string, string> = {
 export function SimulateRun({ quests }: { quests: { id: number; name: string }[] }) {
   const [state, action, pending] = useActionState<SimulateState, FormData>(simulateRun, {});
   const [km, setKm] = useState(5.2);
+  const router = useRouter();
+  const unlocked = state.outcome?.status === "reward_created" ? state.outcome.rewardEventId : undefined;
+  // Same as a real sync: a reward jumps straight to the unlock screen.
+  useEffect(() => {
+    if (unlocked) router.push(`/rewards/${unlocked}?unlocked=1`);
+  }, [unlocked, router]);
 
   return (
     <form action={action} className="card space-y-4 border-dashed">
       <div className="flex items-center justify-between">
         <p className="eyebrow">Demo · simulate a run</p>
-        <span className="pill text-muted">no Strava needed</span>
+        <span className="pill text-muted">no watch needed</span>
       </div>
 
       <label className="block">

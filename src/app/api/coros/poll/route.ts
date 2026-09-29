@@ -20,15 +20,18 @@ function cronAuthorized(req: NextRequest): boolean {
 }
 
 /**
- * Check COROS for new runs. Called every 1–2 minutes by an external cron
- * (Authorization: Bearer CRON_SECRET), or by the dashboard when logged in.
+ * Check COROS for new runs. The dashboard's "Sync runs" button calls this with
+ * ?autobuy=1: clicking Sync is the consent, so unlocked rewards buy themselves
+ * after a cancellable countdown. An optional external cron (Bearer CRON_SECRET)
+ * never auto-buys; its rewards wait for Approve.
  */
 async function handle(req: NextRequest) {
   const loggedIn = await verifySessionToken(req.cookies.get(SESSION_COOKIE)?.value);
   if (!loggedIn && !cronAuthorized(req)) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   const db = await getDb();
   try {
-    const result = await syncCoros(db, pipelineDeps());
+    const autoApprove = loggedIn && req.nextUrl.searchParams.get("autobuy") === "1";
+    const result = await syncCoros(db, pipelineDeps({ autoApprove }));
     return NextResponse.json(result);
   } catch (err) {
     await logEvent(db, { kind: "coros.sync_failed", message: String(err) });

@@ -2,7 +2,8 @@ import { AppShell, PageTitle } from "@/components/AppShell";
 import { config } from "@/lib/config";
 import { getEffectiveSettings, getUser } from "@/lib/settings";
 import { formatCad } from "@/lib/format";
-import { LimitsForm, ProfileForm } from "./SettingsForms";
+import { LimitsForm, ProfileForm, ShoppingBrowser } from "./SettingsForms";
+import { browserOpen } from "@/lib/browser/session";
 import { disconnectCoros, disconnectStrava } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -36,7 +37,9 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
           <p className="mt-3 text-sm text-muted">
             {s.purchasesEnabled
               ? "Real providers can be called. Every purchase is still bounded by the caps below."
-              : "Kill switch engaged: real checkout providers are never called. Rewards run through the mock provider."}
+              : s.provider === "browser"
+                ? "Kill switch engaged: the browser agent runs as a dry run. It goes to the review page and is blocked from placing the order."
+                : "Kill switch engaged: real checkout providers are never called. Rewards run through the mock provider."}
           </p>
           <div className="mt-5 grid gap-3 text-sm sm:grid-cols-4">
             <div>
@@ -61,6 +64,15 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
         <section className="card">
           <h2 className="mb-4 text-lg font-semibold">Limits & provider</h2>
           <LimitsForm env={s.env} row={s.row} />
+        </section>
+
+        <section className="card">
+          <h2 className="mb-1 text-lg font-semibold">Shopping browser</h2>
+          <p className="mb-4 text-sm text-muted">
+            The browser agent shops in its own Chrome window on this PC. Open it on your store, sign in, and make sure your home address and card are saved in your
+            store account. The agent reuses that session and never types passwords or card numbers.
+          </p>
+          <ShoppingBrowser open={browserOpen()} />
         </section>
 
         <section className="card">

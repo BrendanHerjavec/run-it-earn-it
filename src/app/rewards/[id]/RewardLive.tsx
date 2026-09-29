@@ -6,14 +6,14 @@ import type { QuestPin } from "@/components/QuestMap";
 import { formatCad, formatDuration, formatKm, formatPace } from "@/lib/format";
 import { decodePolyline } from "@/lib/geo";
 import { RouteMap } from "./RouteMap";
-import { approveAction, cancelAction, retryAgentAction, skipAction } from "./actions";
+import { approveAction, cancelAction, resumeAction, retryAgentAction, skipAction } from "./actions";
 
 const STAGES = [
-  { key: "run", label: "Run" },
-  { key: "agent", label: "Claude picks" },
-  { key: "approval", label: "Approval" },
-  { key: "checkout", label: "Checkout" },
-  { key: "done", label: "Ordered" },
+  { key: "run", label: "Run", short: "Run" },
+  { key: "agent", label: "Claude picks", short: "Pick" },
+  { key: "approval", label: "Approval", short: "Go" },
+  { key: "checkout", label: "Checkout", short: "Buy" },
+  { key: "done", label: "Ordered", short: "Done" },
 ] as const;
 
 function stageIndex(v: RewardView): number {
@@ -52,8 +52,9 @@ function Stepper({ view }: { view: RewardView }) {
                 style={{ width: done || active || failedHere ? "100%" : "0%" }}
               />
             </div>
-            <span className={`text-xs font-semibold uppercase tracking-wider sm:text-sm ${done || active ? "text-fg" : "text-muted"} ${failedHere ? "text-bad" : ""}`}>
-              {s.label}
+            <span className={`min-w-0 text-xs font-semibold uppercase tracking-wider sm:text-sm ${done || active ? "text-fg" : "text-muted"} ${failedHere ? "text-bad" : ""}`}>
+              <span className="sm:hidden">{s.short}</span>
+              <span className="hidden sm:inline">{s.label}</span>
             </span>
           </li>
         );
@@ -62,7 +63,56 @@ function Stepper({ view }: { view: RewardView }) {
   );
 }
 
+function isDryRun(v: RewardView) {
+  return !!(v.receipt && typeof v.receipt === "object" && (v.receipt as { dryRun?: boolean }).dryRun);
+}
+
+/** Full-screen "reward unlocked" moment after Sync, then it gets out of the way. */
+function UnlockOverlay({ view, onDone }: { view: RewardView; onDone: () => void }) {
+  useEffect(() => {
+    const t = setTimeout(onDone, 3400);
+    return () => clearTimeout(t);
+  }, [onDone]);
+  return (
+    <div className="unlock-overlay fixed inset-0 z-[2000] grid place-items-center bg-bg/95 backdrop-blur" onClick={onDone}>
+      <div className="relative text-center">
+        <div className="unlock-rays pointer-events-none absolute left-1/2 top-1/2 -z-10 size-[140vmin]" style={{ transform: "translate(-50%, -50%)" }} />
+        <p className="unlock-pop eyebrow text-volt">{view.goal?.name ?? "Goal"} complete</p>
+        <h2 className="unlock-pop mt-4 text-6xl font-black tracking-tight sm:text-8xl" style={{ animationDelay: "120ms" }}>
+          REWARD
+          <br />
+          <span className="text-volt">UNLOCKED</span>
+        </h2>
+        <p className="unlock-pop mt-6 text-3xl font-bold tabular-nums text-muted" style={{ animationDelay: "320ms" }}>
+          {formatKm(view.activity.distanceM, 2)} · {formatPace(view.activity.movingTimeS, view.activity.distanceM)}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function Countdown({ at, onCancel, pending }: { at: string; onCancel: () => void; pending: boolean }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 200);
+    return () => clearInterval(t);
+  }, []);
+  const left = Math.max(0, Math.ceil((Date.parse(at) - now) / 1000));
+  return (
+    <div className="card flex flex-wrap items-center justify-between gap-4 border-volt/40">
+      <div className="flex items-center gap-5">
+        <span key={left} className="countdown-tick text-6xl font-black tabular-nums text-volt">{left}</span>
+        <p className="text-xl">{left > 0 ? "Buying it in a moment…" : "Starting checkout…"}</p>
+      </div>
+      <button disabled={pending || left === 0} onClick={onCancel} className="btn px-6 py-3 text-lg">
+        Cancel
+      </button>
+    </div>
+  );
+}
+
 function headline(v: RewardView): string {
+  if (v.status === "completed" && isDryRun(v)) return `Dry run: ${v.item?.title ?? "reward"}`;
   if (v.status === "pending_agent") return "Claude is choosing your reward…";
   if (v.status === "skipped_budget") return "Budget's spent for now";
   if (v.status === "rejected") return `Skipped: ${v.item?.title ?? "reward"}`;
@@ -70,8 +120,19 @@ function headline(v: RewardView): string {
   return v.item?.title ?? "Reward";
 }
 
-export function RewardLive({ initial, quests, timeZone }: { initial: RewardView; quests: QuestPin[]; timeZone: string }) {
+export function RewardLive({
+  initial,
+  quests,
+  timeZone,
+  unlocked = false,
+}: {
+  initial: RewardView;
+  quests: QuestPin[];
+  timeZone: string;
+  unlocked?: boolean;
+}) {
   const [view, setView] = useState(initial);
+  const [showUnlock, setShowUnlock] = useState(unlocked);
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const live = !TERMINAL.includes(view.status);
@@ -106,6 +167,7 @@ export function RewardLive({ initial, quests, timeZone }: { initial: RewardView;
 
   return (
     <div className="space-y-8">
+      {showUnlock && <UnlockOverlay view={view} onDone={() => setShowUnlock(false)} />}
       <header className="space-y-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="eyebrow">
@@ -162,7 +224,12 @@ export function RewardLive({ initial, quests, timeZone }: { initial: RewardView;
 
           {(view.status === "awaiting_approval" || view.status === "checking_out" || (view.status === "failed" && !view.item)) && (
             <div className="flex flex-wrap gap-3">
-              {view.status === "awaiting_approval" && (
+              {view.status === "awaiting_approval" && view.autoApproveAt && (
+                <div className="w-full">
+                  <Countdown at={view.autoApproveAt} pending={pending} onCancel={() => act(skipAction)} />
+                </div>
+              )}
+              {view.status === "awaiting_approval" && !view.autoApproveAt && (
                 <>
                   <button disabled={pending} onClick={() => act(approveAction)} className="btn-primary px-8 py-3 text-lg">
                     Approve
@@ -192,9 +259,19 @@ export function RewardLive({ initial, quests, timeZone }: { initial: RewardView;
           {(view.checkout || view.status === "checking_out") && (
             <div className="card">
               <div className="flex items-center justify-between">
-                <p className="eyebrow">Checkout · {view.provider}</p>
+                <p className="eyebrow">Checkout · {view.provider === "browser" ? "Claude in Chrome on this PC" : view.provider}</p>
                 {view.provider === "mock" && <span className="pill text-muted">simulated, no money</span>}
+                {view.provider === "browser" && <span className="pill text-muted">watch the Chrome window</span>}
               </div>
+              {view.checkout?.state === "awaiting_input" && (
+                <div className="mt-4 rounded-xl border border-warn/50 bg-warn/10 p-4">
+                  <p className="font-semibold text-warn">The agent needs you in the browser window</p>
+                  <p className="mt-1">{view.checkout.needsInput?.question}</p>
+                  <button disabled={pending} onClick={() => act(resumeAction)} className="btn-primary mt-3">
+                    Done, continue
+                  </button>
+                </div>
+              )}
               {view.liveViewUrl && (
                 <iframe src={view.liveViewUrl} className="mt-4 aspect-video w-full rounded-xl border border-line bg-black" title="Live checkout" />
               )}
@@ -212,7 +289,14 @@ export function RewardLive({ initial, quests, timeZone }: { initial: RewardView;
             </div>
           )}
 
-          {view.status === "completed" && (
+          {view.status === "completed" && isDryRun(view) && (
+            <div className="card border-warn/40">
+              <p className="eyebrow text-warn">Dry run: no order placed</p>
+              <p className="mt-2 text-4xl font-black tabular-nums">{formatCad((view.receipt as { totalCents?: number }).totalCents)}</p>
+              <p className="mt-1 text-muted">The agent reached the review page and stopped. Set PURCHASES_ENABLED=true to buy for real.</p>
+            </div>
+          )}
+          {view.status === "completed" && !isDryRun(view) && (
             <div className="card border-good/40">
               <p className="eyebrow text-good">Receipt</p>
               <p className="mt-2 text-4xl font-black tabular-nums">{formatCad(view.totalChargedCents)}</p>

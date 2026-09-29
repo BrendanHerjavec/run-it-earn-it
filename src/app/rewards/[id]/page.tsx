@@ -9,8 +9,15 @@ import { RewardLive } from "./RewardLive";
 
 export const dynamic = "force-dynamic";
 
-export default async function RewardPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function RewardPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<{ unlocked?: string }>;
+}) {
   const id = Number((await params).id);
+  const unlocked = (await searchParams).unlocked === "1";
   if (!Number.isInteger(id)) notFound();
   const db = await getDb();
   const [view, user, questGoals] = await Promise.all([
@@ -26,7 +33,7 @@ export default async function RewardPage({ params }: { params: Promise<{ id: str
 
   return (
     <AppShell wide>
-      <RewardLive initial={view} quests={quests} timeZone={user.timezone} />
+      <RewardLive initial={view} quests={quests} timeZone={user.timezone} unlocked={unlocked} />
     </AppShell>
   );
 }

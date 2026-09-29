@@ -17,8 +17,12 @@ export type RewardDeps = AgentDeps & {
   sleep?: (ms: number) => Promise<void>;
 };
 
-/** Headroom above the quote for small price changes at checkout, still bounded by the caps. */
+/** Headroom above the quote for price changes at checkout, still bounded by the caps. */
 const QUOTE_BUFFER = 1.1;
+/** Estimated quotes (browser agent: shipping unknown until checkout) get more room. */
+const ESTIMATE_BUFFER = 1.25;
+
+export type ApproveVia = "notification" | "dashboard" | "auto" | "sync";
 
 /**
  * Compare-and-set status change. Returns the updated row, or null if the
@@ -90,6 +94,30 @@ async function afterChoice(db: DB, id: number, deps: RewardDeps) {
   if (!row?.item) return;
   const quoted = row.event.quotedTotalCents ?? row.item.expectedPriceCents;
 
+  // "Sync runs": clicking Sync was the consent. Buy after a short, cancellable countdown.
+  if (row.event.autoApprove) {
+    const at = new Date(Date.now() + config().SYNC_COUNTDOWN_S * 1000);
+    const moved = await transition(db, id, ["pending_agent"], "awaiting_approval", { autoApproveAt: at }, `buying in ${config().SYNC_COUNTDOWN_S}s unless cancelled`);
+    if (!moved) return;
+    await notify(
+      db,
+      {
+        title: `🏃 ${formatKm(row.activity.distanceM)} done. Reward unlocked!`,
+        message: `Claude picked: ${row.item.title} (${formatCad(quoted)} incl. tax)
+
+"${row.event.agentMessage}"`,
+        tags: ["tada"],
+        click: rewardPageUrl(id),
+      },
+      { rewardEventId: id },
+    );
+    const sleep = deps.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
+    await sleep(Math.max(0, at.getTime() - Date.now()));
+    // Cancel moves the reward to "rejected"; approveReward only proceeds from awaiting_approval.
+    await approveReward(db, id, "sync", deps);
+    return;
+  }
+
   if (settings.autoBuy && quoted <= settings.autoBuyMaxCents) {
     await transition(db, id, ["pending_agent"], "awaiting_approval", {}, `auto-buy (≤ ${formatCad(settings.autoBuyMaxCents)})`);
     await approveReward(db, id, "auto", deps);
@@ -126,7 +154,7 @@ export type ApproveResult = { ok: true } | { ok: false; reason: string };
  * Approve and start the checkout. Every cap is re-checked here, at the moment
  * money could move, inside a lock so two approvals can't both spend the same budget.
  */
-export async function approveReward(db: DB, id: number, via: "notification" | "dashboard" | "auto", deps: RewardDeps = {}): Promise<ApproveResult> {
+export async function approveReward(db: DB, id: number, via: ApproveVia, deps: RewardDeps = {}): Promise<ApproveResult> {
   const approved = await transition(db, id, ["awaiting_approval"], "approved", { approvedAt: new Date(), approvedVia: via }, `via ${via}`);
   if (!approved) return { ok: false, reason: "This reward is no longer waiting for approval" };
   await burnApprovalToken(db, id);
@@ -152,7 +180,7 @@ export async function approveReward(db: DB, id: number, via: "notification" | "d
       if (quote.totalCents > cap) {
         throw new CapError(`Quoted total ${formatCad(quote.totalCents)} is over the ${formatCad(cap)} you have left`);
       }
-      const max = Math.min(cap, Math.ceil(quote.totalCents * QUOTE_BUFFER));
+      const max = Math.min(cap, Math.ceil(quote.totalCents * (quote.exact ? QUOTE_BUFFER : ESTIMATE_BUFFER)));
       await tx.insert(spendLedger).values({ amountCents: max, currency: "CAD", rewardEventId: id, kind: "reserved" });
       await logEvent(tx, {
         kind: "checkout.quote",
@@ -228,7 +256,31 @@ export async function advanceCheckout(db: DB, id: number, deps: RewardDeps = {})
   if (st.step && st.step !== prevStep) {
     await logEvent(db, { kind: "checkout.step", rewardEventId: id, message: st.step });
   }
+  const prevState = (event.checkoutState as CheckoutStatus | null)?.state;
+  if (st.state === "awaiting_input" && prevState !== "awaiting_input") {
+    await notify(
+      db,
+      { title: "🖐️ Checkout needs you", message: st.needsInput?.question ?? "Check the browser window", priority: 4, click: rewardPageUrl(id) },
+      { rewardEventId: id },
+    );
+  }
 
+  if (st.state === "completed" && st.dryRun) {
+    const done = await transition(db, id, ["checking_out"], "completed", {
+      totalChargedCents: 0,
+      receipt: st.receipt ?? { dryRun: true, totalCents: st.totalCents },
+      completedAt: new Date(),
+    }, "dry run: stopped before placing the order");
+    if (done) {
+      await db.update(spendLedger).set({ kind: "released" }).where(eq(spendLedger.rewardEventId, id));
+      await notify(
+        db,
+        { title: "🧪 Dry run finished", message: `${item?.title}: total would be ${formatCad(st.totalCents ?? 0)}. No order placed.`, click: rewardPageUrl(id) },
+        { rewardEventId: id },
+      );
+    }
+    return "completed";
+  }
   if (st.state === "completed") {
     const total = st.totalCents ?? 0;
     const cap = event.maxSpendCents ?? 0;
@@ -267,7 +319,7 @@ export async function advanceCheckout(db: DB, id: number, deps: RewardDeps = {})
 }
 
 /** Keep polling until the checkout finishes or the time budget runs out (the dashboard keeps polling after). */
-export async function runCheckoutLoop(db: DB, id: number, deps: RewardDeps = {}, opts = { intervalMs: 2000, budgetMs: 270_000 }) {
+export async function runCheckoutLoop(db: DB, id: number, deps: RewardDeps = {}, opts = { intervalMs: 2000, budgetMs: 20 * 60_000 }) {
   const sleep = deps.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
   const until = Date.now() + opts.budgetMs;
   while (Date.now() < until) {
@@ -276,6 +328,17 @@ export async function runCheckoutLoop(db: DB, id: number, deps: RewardDeps = {},
     await sleep(opts.intervalMs);
   }
   return "checking_out" as const;
+}
+
+/** The runner fixed something in the browser (signed in, entered a code); let the agent continue. */
+export async function resumeCheckout(db: DB, id: number, note: string, deps: RewardDeps = {}) {
+  const row = await load(db, id);
+  if (!row || row.event.status !== "checking_out" || !row.event.providerRunId) return false;
+  const provider = deps.provider ?? providerByName(row.event.provider ?? "mock", await getEffectiveSettings(db));
+  if (!provider.respond) return false;
+  await provider.respond(row.event.providerRunId, note);
+  await logEvent(db, { kind: "checkout.resumed", rewardEventId: id, message: note || "continue" });
+  return true;
 }
 
 export async function cancelCheckout(db: DB, id: number, deps: RewardDeps = {}) {

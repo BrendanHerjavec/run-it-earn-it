@@ -4,7 +4,7 @@ import { after } from "next/server";
 import { getDb } from "@/db";
 import { requireAuth } from "@/lib/auth";
 import { logEvent } from "@/lib/events";
-import { approveReward, cancelCheckout, retryAgent, runCheckoutLoop, runRewardAgent, skipReward } from "@/lib/rewards";
+import { approveReward, cancelCheckout, resumeCheckout, retryAgent, runCheckoutLoop, runRewardAgent, skipReward } from "@/lib/rewards";
 
 export type ActionResult = { ok: boolean; error?: string };
 
@@ -42,4 +42,10 @@ export async function retryAgentAction(id: number): Promise<ActionResult> {
     }
   });
   return { ok: true };
+}
+
+export async function resumeAction(id: number): Promise<ActionResult> {
+  await requireAuth();
+  const ok = await resumeCheckout(await getDb(), id, "I've handled it in the browser");
+  return ok ? { ok } : { ok, error: "This checkout isn't waiting for you" };
 }

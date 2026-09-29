@@ -165,3 +165,50 @@ describe("end to end with the mock provider", () => {
     expect(sent).toHaveLength(1);
   });
 });
+
+describe("Sync runs: automatic purchase after a countdown", () => {
+  async function syncedReward(sleep: RewardDeps["sleep"]) {
+    const run = stravaRun({ distance: 5200 });
+    let created: number | undefined;
+    await handleWebhookEvent(
+      db,
+      { object_type: "activity", object_id: run.id, aspect_type: "create", owner_id: ATHLETE_ID, subscription_id: 1, event_time: 0 },
+      {
+        autoApprove: true,
+        fetchActivity: async () => run,
+        onRewardCreated: async (_db, id) => {
+          created = id;
+          await runRewardAgent(db, id, { ...deps, sleep });
+        },
+      },
+    );
+    return created!;
+  }
+
+  it("buys without an Approve tap once the countdown ends", async () => {
+    let waited = 0;
+    const id = await syncedReward(async (ms) => {
+      waited = ms;
+    });
+    const [ev] = await db.select().from(rewardEvents).where(eq(rewardEvents.id, id));
+    expect(ev.autoApprove).toBe(true);
+    expect(waited).toBeGreaterThan(8_000); // ~10 s countdown
+    expect(ev.status).toBe("checking_out");
+    expect(ev.approvedVia).toBe("sync");
+    // No Approve/Skip buttons on the notification: the Sync click was the consent.
+    expect(sent[0].actions).toBeUndefined();
+    expect(await runCheckoutLoop(db, id, deps, { intervalMs: 2000, budgetMs: 60_000 })).toBe("completed");
+  });
+
+  it("Cancel during the countdown stops the purchase", async () => {
+    let id = 0;
+    id = await syncedReward(async () => {
+      // The runner hits Cancel while the countdown is running.
+      const [row] = await db.select().from(rewardEvents);
+      await skipReward(db, row.id, "dashboard");
+    });
+    const [ev] = await db.select().from(rewardEvents).where(eq(rewardEvents.id, id));
+    expect(ev.status).toBe("rejected");
+    expect(await db.select().from(spendLedger)).toHaveLength(0);
+  });
+});

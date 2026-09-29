@@ -2,7 +2,7 @@
 
 import { useActionState } from "react";
 import type { User } from "@/db/schema";
-import { saveLimits, saveProfile, type FormState } from "./actions";
+import { closeShoppingBrowser, openShoppingBrowser, saveLimits, saveProfile, type FormState } from "./actions";
 
 type LimitsProps = {
   env: { maxOrderCents: number; maxDailyCents: number; maxWeeklyCents: number; autoBuyMaxCents: number; autoBuy: boolean; provider: string };
@@ -53,6 +53,7 @@ export function LimitsForm({ env, row }: LimitsProps) {
           <select name="provider" defaultValue={row.provider ?? ""} className="input mt-1">
             <option value="">Use env ({env.provider})</option>
             <option value="mock">Mock (simulated, no money)</option>
+            <option value="browser">Browser agent (Claude drives Chrome on this PC)</option>
             <option value="crossmint">Crossmint (real purchases)</option>
             <option value="rye">Rye (US addresses only)</option>
           </select>
@@ -107,5 +108,26 @@ export function ProfileForm({ user }: { user: User }) {
         <Saved state={state} />
       </div>
     </form>
+  );
+}
+
+export function ShoppingBrowser({ open }: { open: boolean }) {
+  const [state, action, pending] = useActionState<FormState, FormData>(openShoppingBrowser, {});
+  return (
+    <div className="space-y-3">
+      <form action={action} className="flex flex-wrap items-end gap-3">
+        <label className="min-w-64 flex-1">
+          <span className="label">Store URL</span>
+          <input name="url" type="url" required placeholder="https://www.your-store.ca/account/login" className="input mt-1 font-mono text-sm" />
+        </label>
+        <button disabled={pending} className="btn-primary">{pending ? "Opening…" : "Open shopping browser"}</button>
+      </form>
+      {open && (
+        <form action={closeShoppingBrowser}>
+          <button className="btn">Close shopping browser</button>
+        </form>
+      )}
+      <Saved state={state} />
+    </div>
   );
 }

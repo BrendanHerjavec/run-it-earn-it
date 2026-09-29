@@ -20,6 +20,7 @@
     "@electric-sql/pglite": "^0.5.8",
     "@mapbox/polyline": "^1.2.1",
     "@modelcontextprotocol/sdk": "^1.31.0",
+    "@playwright/mcp": "^0.0.83",
     "drizzle-orm": "^0.45.3",
     "fit-file-parser": "^6.1.2",
     "leaflet": "^1.9.4",

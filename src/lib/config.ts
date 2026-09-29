@@ -38,7 +38,13 @@ const schema = z.object({
   NTFY_TOKEN: z.string().default(""),
   APPROVAL_SIGNING_SECRET: z.string().default(""),
   TOKEN_ENCRYPTION_KEY: z.string().default(""),
-  CHECKOUT_PROVIDER: z.enum(["mock", "crossmint", "rye"]).default("mock"),
+  CHECKOUT_PROVIDER: z.enum(["mock", "browser", "crossmint", "rye"]).default("mock"),
+  /** Model for the local browser checkout agent. */
+  BROWSER_AGENT_MODEL: z.string().default("claude-sonnet-5"),
+  /** Chrome profile the checkout agent uses; sign in to your store here once. */
+  SHOPPING_PROFILE_DIR: z.string().default(".data/shopping-profile"),
+  /** Seconds between Claude's pick and the automatic purchase after "Sync runs". */
+  SYNC_COUNTDOWN_S: dollars(10),
   PURCHASES_ENABLED: bool(false),
   AUTO_BUY: bool(false),
   DEMO_TOOLS_ENABLED: bool(true),

@@ -7,6 +7,7 @@ import { getDb } from "@/db";
 import { settings, users } from "@/db/schema";
 import { requireAuth } from "@/lib/auth";
 import { parseDollarsToCents } from "@/lib/format";
+import { closeBrowser, getBrowser } from "@/lib/browser/session";
 import { getSettingsRow, getUser } from "@/lib/settings";
 
 export type FormState = { error?: string; ok?: boolean };
@@ -24,7 +25,7 @@ export async function saveLimits(_prev: FormState, form: FormData): Promise<Form
       maxWeeklyCents: parseDollarsToCents(form.get("maxWeekly")),
       autoBuyMaxCents: parseDollarsToCents(form.get("autoBuyMax")),
       autoBuy: form.get("autoBuy") === "on",
-      provider: provider === "mock" || provider === "crossmint" || provider === "rye" ? provider : null,
+      provider: provider === "mock" || provider === "browser" || provider === "crossmint" || provider === "rye" ? provider : null,
       crossmintBuyerProfileId: String(form.get("crossmintBuyerProfileId") ?? "").trim() || null,
     })
     .where(eq(settings.id, 1));
@@ -78,5 +79,26 @@ export async function disconnectCoros() {
   const db = await getDb();
   const user = await getUser(db);
   await db.update(users).set({ corosTokensEnc: null, corosConnectedAt: null }).where(eq(users.id, user.id));
+  revalidatePath("/settings");
+}
+
+/** Open the agent's Chrome profile on a store page so you can sign in (and save your card and address there) once. */
+export async function openShoppingBrowser(_prev: FormState, form: FormData): Promise<FormState> {
+  await requireAuth();
+  const url = String(form.get("url") ?? "");
+  if (!/^https?:\/\//i.test(url)) return { error: "Enter a full http(s) URL" };
+  try {
+    const browser = await getBrowser();
+    await browser.callTool({ name: "browser_navigate", arguments: { url } });
+    revalidatePath("/settings");
+    return { ok: true };
+  } catch (err) {
+    return { error: `Couldn't open Chrome: ${String(err)}` };
+  }
+}
+
+export async function closeShoppingBrowser() {
+  await requireAuth();
+  await closeBrowser();
   revalidatePath("/settings");
 }

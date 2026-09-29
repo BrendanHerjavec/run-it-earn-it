@@ -8,7 +8,7 @@ import { budgetStatus, runStreakDays, weeklyDistanceM } from "@/lib/stats";
 import { formatCad, formatKm, formatPace } from "@/lib/format";
 import { config } from "@/lib/config";
 import { SimulateRun } from "./SimulateRun";
-import { CorosSync } from "./CorosSync";
+import { SyncRuns } from "./SyncRuns";
 
 export const dynamic = "force-dynamic";
 
@@ -50,6 +50,10 @@ export default async function Home() {
         </span>
         <span className="pill text-muted">provider: {s.purchasesEnabled ? s.provider : "mock"}</span>
         <span className="pill text-muted">{s.autoBuy ? "auto-buy" : "approval mode"}</span>
+      </div>
+
+      <div className="mb-8">
+        <SyncRuns connected={!!user.corosTokensEnc} />
       </div>
 
       <section className="grid gap-4 sm:grid-cols-3">
@@ -130,7 +134,6 @@ export default async function Home() {
         </section>
 
         <section className="space-y-8 lg:col-span-2">
-          {user.corosTokensEnc && <CorosSync />}
           {demo && <SimulateRun quests={activeGoals.filter((g) => g.type === "quest").map((g) => ({ id: g.id, name: g.name }))} />}
           <div>
           <h2 className="mb-4 text-lg font-semibold">Active goals</h2>
