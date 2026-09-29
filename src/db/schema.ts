@@ -141,6 +141,14 @@ export const rewardEvents = pgTable(
     approvalTokenExpiresAt: timestamp("approval_token_expires_at", { withTimezone: true }),
     approvalTokenUsedAt: timestamp("approval_token_used_at", { withTimezone: true }),
     approvedAt: timestamp("approved_at", { withTimezone: true }),
+    /** "notification" | "dashboard" | "auto" */
+    approvedVia: text("approved_via"),
+    /** Set when an agent run claims this reward, so two agents never run for one reward. */
+    agentStartedAt: timestamp("agent_started_at", { withTimezone: true }),
+    /** Hard spend cap handed to the provider (and reserved in the ledger). */
+    maxSpendCents: integer("max_spend_cents"),
+    /** Latest provider status snapshot, for the live dashboard. */
+    checkoutState: jsonb("checkout_state"),
     completedAt: timestamp("completed_at", { withTimezone: true }),
     ...timestamps,
   },

@@ -4,7 +4,7 @@ Finish a run that hits a goal → a Claude agent picks a reward from your wishli
 
 Single-user app. Next.js 16 (App Router) + TypeScript + Drizzle/Postgres, deployed on Vercel.
 
-> **Status:** Phases 1–2 are done: scaffold, auth, settings, wishlist, goals, Strava OAuth and webhook, rules engine, and Simulate run. The agent, notifications and checkout providers land in Phases 3–4.
+> **Status:** Phases 1–3 are done. The full pipeline (Strava or Simulate run → Claude picks → phone Approve → checkout → receipt) works end to end with the **mock** checkout. Real checkout providers are Phase 4.
 
 ## How a run becomes a reward
 
@@ -15,7 +15,16 @@ Single-user app. Next.js 16 (App Router) + TypeScript + Drizzle/Postgres, deploy
    - **Single-run distance:** every qualifying run earns it.
    - **Weekly distance:** earned by the run that crosses the target, once per local week (Monday start, in your timezone).
    - **Quest:** earned the first time the route passes within the radius. We check the distance to each *segment* of the polyline, not just the recorded points.
-5. At most one reward per activity (highest tier wins). If no wishlist item fits the remaining budget and tier, the reward is `skipped_budget`. Otherwise it's `pending_agent`, and Phase 3 hands it to Claude.
+5. At most one reward per activity (highest tier wins). If no wishlist item fits the remaining budget and tier, the reward is `skipped_budget`. Otherwise it's `pending_agent`.
+6. **Claude** (`claude-sonnet-5`, adaptive thinking) calls `get_run_summary`, `get_budget_status` and `list_wishlist`, then `choose_reward(item_id, message)`. The server re-checks the item, tier and price including tax, and returns an error if the choice isn't allowed, so Claude picks again. The full transcript, including summarized thinking, is saved for replay.
+7. **ntfy** pushes "Claude picked X, Approve?" with **Approve** / **Skip** buttons. The links are signed, bound to the reward, single-use and expire in 2 hours.
+8. **Approve** re-checks every cap under a lock, reserves a hard cap (quote + 10%, never above what's left) in the spend ledger, and starts the checkout. The dashboard shows live progress; the ledger settles to the actual charge, or is released if the checkout fails.
+
+```
+pending_agent → awaiting_approval → approved → checking_out → completed
+      ↓                ↓                             ↓
+   failed          rejected (Skip)                 failed
+```
 
 ## Strava setup
 
@@ -29,6 +38,13 @@ npm run strava:webhook -- create https://YOUR-PUBLIC-URL/api/strava/webhook
 ```
 
 `npm run strava:webhook -- view` / `-- delete <id>` manage it. Strava allows one subscription per app.
+
+## Phone notifications (ntfy)
+
+1. Install the **ntfy** app (iOS / Android).
+2. Pick a long, unguessable topic name, e.g. `runny-$(openssl rand -hex 8)`. Anyone who knows it can read your notifications.
+3. Subscribe to that topic in the app and set `NTFY_TOPIC` in `.env.local`.
+4. The Approve button makes your **phone** call `APP_BASE_URL`, so it only works once the app has a public URL (Vercel, or a tunnel). Until then, approve from the reward page on the dashboard.
 
 ## Filming without running
 
@@ -69,6 +85,10 @@ After changing `src/db/schema.ts`, run `npm run db:generate` to create a new mig
 | One reward per activity | unique index on `reward_events.activity_id` |
 | One ledger charge per reward | unique index on `spend_ledger.reward_event_id` |
 | Strava tokens encrypted at rest (AES-256-GCM) | `src/lib/crypto.ts` |
+| Claude can only pick active wishlist items within tier and budget | validated in `choose_reward`, not just the prompt |
+| Caps re-checked at approval, with a hard cap handed to the provider | `approveReward` in `src/lib/rewards.ts` |
+| Approve links: HMAC-signed, single-use, 2 h expiry, GET only shows a confirm button | `src/lib/approval.ts` |
+| Every agent tool call, provider call and state change is logged (secrets redacted) | `event_log` table |
 
 ## Scripts
 
