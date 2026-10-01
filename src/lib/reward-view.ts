@@ -38,6 +38,8 @@ export type RewardView = {
     source: string;
   };
   goal: { name: string; type: string; rewardTier: string } | null;
+  /** Other rewards unlocked by the same run (e.g. 5 K and 10 K milestones together). */
+  siblings: { id: number; goalName: string | null; status: string; itemTitle: string | null }[];
 };
 
 function flattenTranscript(raw: unknown): RewardView["transcript"] {
@@ -70,6 +72,13 @@ export async function getRewardView(db: DB, id: number): Promise<RewardView | nu
     .where(eq(rewardEvents.id, id));
   if (!row) return null;
   const { event: e, activity: a, goal: g, item: i } = row;
+  const siblings = await db
+    .select({ id: rewardEvents.id, goalName: goals.name, status: rewardEvents.status, itemTitle: wishlistItems.title })
+    .from(rewardEvents)
+    .leftJoin(goals, eq(rewardEvents.goalId, goals.id))
+    .leftJoin(wishlistItems, eq(rewardEvents.chosenItemId, wishlistItems.id))
+    .where(eq(rewardEvents.activityId, a.id))
+    .orderBy(asc(rewardEvents.id));
   const log = await db
     .select()
     .from(eventLog)
@@ -104,5 +113,6 @@ export async function getRewardView(db: DB, id: number): Promise<RewardView | nu
       source: a.source,
     },
     goal: g ? { name: g.name, type: g.type, rewardTier: g.rewardTier } : null,
+    siblings: siblings.filter((x) => x.id !== e.id),
   };
 }

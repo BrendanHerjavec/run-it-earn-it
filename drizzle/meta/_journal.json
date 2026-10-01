@@ -29,6 +29,13 @@
       "when": 1790708070394,
       "tag": "0003_sync_autobuy",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1790885480443,
+      "tag": "0004_challenges",
+      "breakpoints": true
     }
   ]
 }

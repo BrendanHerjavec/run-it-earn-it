@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 import { getDb } from "@/db";
 import { activities, goals, rewardEvents, wishlistItems } from "@/db/schema";
 import { AppShell, TierPill } from "@/components/AppShell";
@@ -9,6 +9,8 @@ import { formatCad, formatKm, formatPace } from "@/lib/format";
 import { config } from "@/lib/config";
 import { SimulateRun } from "./SimulateRun";
 import { SyncRuns } from "./SyncRuns";
+import { ChallengeBar } from "@/components/ChallengeBar";
+import { challengeProgress } from "@/lib/challenges";
 
 export const dynamic = "force-dynamic";
 
@@ -22,7 +24,7 @@ export default async function Home() {
     weeklyDistanceM(db, now, tz),
     runStreakDays(db, now, tz),
     budgetStatus(db, s, now, tz),
-    db.select().from(goals).where(eq(goals.active, true)).orderBy(goals.type, goals.targetKm),
+    db.select().from(goals).where(and(eq(goals.active, true), isNull(goals.challengeId))).orderBy(goals.type, goals.targetKm),
     db
       .select({ event: rewardEvents, activity: activities, item: wishlistItems })
       .from(rewardEvents)
@@ -38,6 +40,7 @@ export default async function Home() {
       .limit(8),
   ]);
   const demo = config().DEMO_TOOLS_ENABLED;
+  const challengesNow = (await challengeProgress(db, now, tz)).filter((p) => p.window);
 
   const weeklyGoal = activeGoals.find((g) => g.type === "weekly_distance");
   const last = latest[0];
@@ -52,8 +55,11 @@ export default async function Home() {
         <span className="pill text-muted">{s.autoBuy ? "auto-buy" : "approval mode"}</span>
       </div>
 
-      <div className="mb-8">
+      <div className="mb-8 space-y-4">
         <SyncRuns connected={!!user.corosTokensEnc} />
+        {challengesNow.map((p) => (
+          <ChallengeBar key={p.challenge.id} p={p} timeZone={tz} />
+        ))}
       </div>
 
       <section className="grid gap-4 sm:grid-cols-3">

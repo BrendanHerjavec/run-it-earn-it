@@ -79,6 +79,23 @@ export const settings = pgTable("settings", {
   ...timestamps,
 });
 
+/**
+ * A distance challenge over a time window, e.g. "Week of Oct 6: 5 / 10 / 20 km".
+ * Its milestones are goals (type weekly_distance) with challengeId set; each
+ * milestone unlocks its own reward when the window's running total crosses it.
+ */
+export const challenges = pgTable("challenges", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull(),
+  /** First day of the window, local date "YYYY-MM-DD" in the user's timezone. */
+  startsOn: text("starts_on").notNull(),
+  lengthDays: integer("length_days").notNull().default(7),
+  /** Start a fresh window every lengthDays after the first one ends. */
+  repeats: boolean("repeats").notNull().default(false),
+  active: boolean("active").notNull().default(true),
+  ...timestamps,
+});
+
 export const goals = pgTable("goals", {
   id: serial("id").primaryKey(),
   name: text("name").notNull(),
@@ -88,6 +105,10 @@ export const goals = pgTable("goals", {
   lng: doublePrecision("lng"),
   radiusM: integer("radius_m"),
   rewardTier: tierEnum("reward_tier").notNull().default("small"),
+  /** Milestone of a challenge (weekly_distance goals only); its window comes from the challenge. */
+  challengeId: integer("challenge_id").references(() => challenges.id),
+  /** Optional fixed reward: Claude must pick this item instead of choosing within the tier. */
+  rewardItemId: integer("reward_item_id").references(() => wishlistItems.id),
   active: boolean("active").notNull().default(true),
   ...timestamps,
 });
@@ -135,7 +156,7 @@ export const rewardEvents = pgTable(
   "reward_events",
   {
     id: serial("id").primaryKey(),
-    /** Unique: one reward per activity. This is the idempotency backstop for webhook retries. */
+    /** Unique with goalId: the idempotency backstop for webhook retries and repeated syncs. */
     activityId: integer("activity_id")
       .notNull()
       .references(() => activities.id),
@@ -170,7 +191,8 @@ export const rewardEvents = pgTable(
     completedAt: timestamp("completed_at", { withTimezone: true }),
     ...timestamps,
   },
-  (t) => [uniqueIndex("reward_events_activity_uq").on(t.activityId)],
+  // One reward per goal per activity: a big run can unlock several challenge milestones at once.
+  (t) => [uniqueIndex("reward_events_activity_goal_uq").on(t.activityId, t.goalId)],
 );
 
 export const spendLedger = pgTable("spend_ledger", {
@@ -218,6 +240,7 @@ export const locationPings = pgTable("location_pings", {
 export type User = typeof users.$inferSelect;
 export type Settings = typeof settings.$inferSelect;
 export type Goal = typeof goals.$inferSelect;
+export type Challenge = typeof challenges.$inferSelect;
 export type WishlistItem = typeof wishlistItems.$inferSelect;
 export type Activity = typeof activities.$inferSelect;
 export type RewardEvent = typeof rewardEvents.$inferSelect;

@@ -1,8 +1,9 @@
 import { and, eq, gte, inArray, lt } from "drizzle-orm";
 import type { DB } from "@/db";
-import { activities, goals, rewardEvents, type Activity, type Goal } from "@/db/schema";
+import { activities, challenges, goals, rewardEvents, type Activity, type Goal } from "@/db/schema";
+import { challengeWindow } from "./challenges";
 import { closestApproachM, decodePolyline, routePassesWithin } from "./geo";
-import { RUN_TYPES, weeklyDistanceM } from "./stats";
+import { distanceBetweenM, RUN_TYPES } from "./stats";
 import { startOfLocalWeek } from "./time";
 import { TIERS } from "./tiers";
 
@@ -50,6 +51,7 @@ async function goalAlreadyPaid(db: DB, goalId: number, since?: Date, until?: Dat
  */
 export async function evaluateGoals(db: DB, activity: Activity, timeZone: string): Promise<GoalHit[]> {
   const active = await db.select().from(goals).where(eq(goals.active, true));
+  const challengeById = new Map((await db.select().from(challenges)).map((c) => [c.id, c]));
   const hits: GoalHit[] = [];
   const km = activity.distanceM / 1000;
   let route: ReturnType<typeof decodePolyline> | null = null;
@@ -58,14 +60,24 @@ export async function evaluateGoals(db: DB, activity: Activity, timeZone: string
     if (goal.type === "single_run_distance" && goal.targetKm != null) {
       if (km >= goal.targetKm) hits.push({ goal, detail: `${km.toFixed(2)} km ≥ ${goal.targetKm} km in one run` });
     } else if (goal.type === "weekly_distance" && goal.targetKm != null) {
-      const totalKm = (await weeklyDistanceM(db, activity.startTime, timeZone)) / 1000;
+      // A challenge milestone uses its challenge's window; a plain weekly goal uses the calendar week.
+      let from: Date;
+      let to: Date;
+      let label: string;
+      if (goal.challengeId != null) {
+        const c = challengeById.get(goal.challengeId);
+        const w = c?.active ? challengeWindow(c, activity.startTime, timeZone) : null;
+        if (!c || !w) continue;
+        [from, to, label] = [w.start, w.end, `${c.name}`];
+      } else {
+        from = startOfLocalWeek(activity.startTime, timeZone);
+        to = new Date(from.getTime() + 8 * 86_400_000);
+        label = "Weekly total";
+      }
+      const totalKm = (await distanceBetweenM(db, from, activity.startTime)) / 1000;
       const beforeKm = totalKm - km;
-      if (beforeKm < goal.targetKm && totalKm >= goal.targetKm) {
-        const weekStart = startOfLocalWeek(activity.startTime, timeZone);
-        const weekEnd = new Date(weekStart.getTime() + 8 * 86_400_000);
-        if (!(await goalAlreadyPaid(db, goal.id, weekStart, weekEnd))) {
-          hits.push({ goal, detail: `Weekly total reached ${totalKm.toFixed(2)} km (target ${goal.targetKm} km)` });
-        }
+      if (beforeKm < goal.targetKm && totalKm >= goal.targetKm && !(await goalAlreadyPaid(db, goal.id, from, to))) {
+        hits.push({ goal, detail: `${label}: ${totalKm.toFixed(2)} km, unlocked the ${goal.targetKm} km milestone` });
       }
     } else if (goal.type === "quest" && goal.lat != null && goal.lng != null) {
       route ??= decodePolyline(activity.polyline);
@@ -79,7 +91,18 @@ export async function evaluateGoals(db: DB, activity: Activity, timeZone: string
   return hits;
 }
 
-/** One reward per activity: take the highest tier; quests win ties (they're the fun ones). */
+/**
+ * Which hits pay out for one activity:
+ *  - every challenge milestone crossed (a big run can unlock 5 K and 10 K at once);
+ *  - plus the single best of the other goals (highest tier; quests win ties).
+ */
+export function selectRewards(hits: GoalHit[]): GoalHit[] {
+  const milestones = hits.filter((h) => h.goal.challengeId != null).sort((a, b) => (a.goal.targetKm ?? 0) - (b.goal.targetKm ?? 0));
+  const best = pickGoal(hits.filter((h) => h.goal.challengeId == null));
+  return best ? [...milestones, best] : milestones;
+}
+
+/** Highest tier; quests win ties (they're the fun ones). */
 export function pickGoal(hits: GoalHit[]): GoalHit | null {
   if (hits.length === 0) return null;
   const typeRank = { quest: 2, weekly_distance: 1, single_run_distance: 0 } as const;

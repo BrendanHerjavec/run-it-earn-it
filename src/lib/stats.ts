@@ -8,14 +8,18 @@ export const RUN_TYPES = ["Run", "TrailRun"];
 
 /** Total metres of valid (unflagged) runs since the start of the local week containing `at`. */
 export async function weeklyDistanceM(db: DB, at: Date, timeZone: string): Promise<number> {
-  const since = startOfLocalWeek(at, timeZone);
+  return distanceBetweenM(db, startOfLocalWeek(at, timeZone), at);
+}
+
+/** Total metres of valid (unflagged) runs starting in [since, until]. */
+export async function distanceBetweenM(db: DB, since: Date, until: Date): Promise<number> {
   const [row] = await db
     .select({ total: sql<number>`coalesce(sum(${activities.distanceM}), 0)` })
     .from(activities)
     .where(
       and(
         gte(activities.startTime, since),
-        lte(activities.startTime, at),
+        lte(activities.startTime, until),
         inArray(activities.sportType, RUN_TYPES),
         sql`${activities.flagged} = false`,
       ),

@@ -4,24 +4,37 @@ import { logEvent } from "./events";
 import { runCheckoutLoop, runRewardAgent } from "./rewards";
 
 /**
- * Production wiring. The agent runs after the response is sent (webhook ack,
- * Sync / Simulate buttons), so callers never wait on Claude. If the reward is
- * approved automatically (Sync countdown or auto-buy), the checkout loop
- * continues in the same background task. The app runs locally, so there's no
- * serverless time limit; the loop gives a browser checkout up to 20 minutes.
+ * One reward at a time: several milestones can unlock from one sync, but there
+ * is one shopping browser, and a clear one-after-another sequence films better.
+ */
+const g = globalThis as unknown as { __runnyQueue?: { tail: Promise<unknown> } };
+const queue = (g.__runnyQueue ??= { tail: Promise.resolve() });
+function enqueue(task: () => Promise<void>): Promise<void> {
+  const next = queue.tail.then(task, task);
+  queue.tail = next.catch(() => {});
+  return next;
+}
+
+/**
+ * Production wiring. Rewards are processed after the response is sent (Sync /
+ * Simulate buttons, webhook), so callers never wait on Claude. If the reward is
+ * approved automatically (Sync countdown or auto-buy), its checkout runs before
+ * the next reward starts. The app runs locally, so there's no serverless time limit.
  */
 export function pipelineDeps(opts: { autoApprove?: boolean } = {}): PipelineDeps {
   return {
     autoApprove: opts.autoApprove,
     onRewardCreated: async (db, rewardId) => {
-      after(async () => {
-        try {
-          await runRewardAgent(db, rewardId);
-          await runCheckoutLoop(db, rewardId);
-        } catch (err) {
-          await logEvent(db, { kind: "pipeline.error", rewardEventId: rewardId, message: String(err) });
-        }
-      });
+      after(() =>
+        enqueue(async () => {
+          try {
+            await runRewardAgent(db, rewardId);
+            await runCheckoutLoop(db, rewardId);
+          } catch (err) {
+            await logEvent(db, { kind: "pipeline.error", rewardEventId: rewardId, message: String(err) });
+          }
+        }),
+      );
     },
   };
 }

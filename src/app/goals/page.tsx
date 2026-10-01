@@ -1,9 +1,14 @@
-import { desc } from "drizzle-orm";
+import { asc, desc, eq } from "drizzle-orm";
 import { getDb } from "@/db";
-import { goals } from "@/db/schema";
+import { challenges, goals, wishlistItems } from "@/db/schema";
+import { ChallengeBar } from "@/components/ChallengeBar";
+import { challengeProgress } from "@/lib/challenges";
+import { getUser } from "@/lib/settings";
+import { localDateKey } from "@/lib/time";
+import { ChallengeForm } from "./ChallengeForm";
 import { AppShell, PageTitle, TierPill } from "@/components/AppShell";
 import { DistanceGoalForm, QuestForm } from "./GoalForms";
-import { deleteGoal, toggleGoal } from "./actions";
+import { deleteChallenge, deleteGoal, toggleChallenge, toggleGoal } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -15,7 +20,17 @@ const TYPE_LABEL = {
 
 export default async function GoalsPage() {
   const db = await getDb();
-  const all = await db.select().from(goals).orderBy(desc(goals.active), desc(goals.createdAt));
+  const user = await getUser(db);
+  const now = new Date();
+  const [allGoals, items, allChallenges] = await Promise.all([
+    db.select().from(goals).orderBy(desc(goals.active), desc(goals.createdAt)),
+    db.select().from(wishlistItems).where(eq(wishlistItems.active, true)).orderBy(asc(wishlistItems.expectedPriceCents)),
+    db.select().from(challenges).orderBy(desc(challenges.active), desc(challenges.createdAt)),
+  ]);
+  const progress = new Map(
+    (await Promise.all(allChallenges.map((c) => challengeProgress(db, now, user.timezone, c.id)))).flat().map((p) => [p.challenge.id, p]),
+  );
+  const all = allGoals.filter((g) => g.challengeId == null);
   const quests = all
     .filter((g) => g.type === "quest" && g.lat != null && g.lng != null)
     .map((g) => ({ id: g.id, name: g.name, lat: g.lat!, lng: g.lng!, radiusM: g.radiusM ?? 75, active: g.active }));
@@ -25,6 +40,44 @@ export default async function GoalsPage() {
       <PageTitle eyebrow="What earns a reward" title="Goals & quests" />
 
       <div className="grid gap-8">
+        <section className="card">
+          <h2 className="mb-1 text-lg font-semibold">New challenge</h2>
+          <p className="mb-4 text-sm text-muted">
+            Run a total distance inside a time window. Every milestone you pass unlocks its own reward: pick the item yourself, or let Claude choose within a tier.
+          </p>
+          <ChallengeForm items={items.map((i) => ({ id: i.id, title: i.title, priceCents: i.expectedPriceCents }))} today={localDateKey(now, user.timezone)} />
+        </section>
+
+        {allChallenges.length > 0 && (
+          <section className="space-y-4">
+            <h2 className="text-lg font-semibold">Challenges</h2>
+            {allChallenges.map((c) => {
+              const p = progress.get(c.id);
+              return (
+                <div key={c.id} className={c.active ? "" : "opacity-50"}>
+                  {p && <ChallengeBar p={p} timeZone={user.timezone} />}
+                  <div className="mt-2 flex flex-wrap items-center justify-between gap-2 px-1 text-sm text-muted">
+                    <span>
+                      From {c.startsOn}, {c.lengthDays} days{c.repeats ? ", repeats" : ""}
+                    </span>
+                    <div className="flex gap-2">
+                      <form action={toggleChallenge}>
+                        <input type="hidden" name="id" value={c.id} />
+                        <input type="hidden" name="active" value={String(!c.active)} />
+                        <button className="btn">{c.active ? "Pause" : "Activate"}</button>
+                      </form>
+                      <form action={deleteChallenge}>
+                        <input type="hidden" name="id" value={c.id} />
+                        <button className="btn-danger">Delete</button>
+                      </form>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </section>
+        )}
+
         <section className="card">
           <h2 className="mb-4 text-lg font-semibold">New distance goal</h2>
           <DistanceGoalForm />

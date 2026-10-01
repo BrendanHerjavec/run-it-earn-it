@@ -56,3 +56,22 @@ export function localDateKey(date: Date, timeZone: string): string {
   const p = partsIn(date, timeZone);
   return `${p.y}-${String(p.m).padStart(2, "0")}-${String(p.d).padStart(2, "0")}`;
 }
+
+/** UTC instant of local midnight at the start of a "YYYY-MM-DD" local date. */
+export function localDateStart(dateKey: string, timeZone: string): Date {
+  const [y, m, d] = dateKey.split("-").map(Number);
+  return localMidnight(y, m, d, timeZone);
+}
+
+/** Calendar arithmetic on "YYYY-MM-DD" keys (no timezone involved). */
+export function addDays(dateKey: string, days: number): string {
+  const [y, m, d] = dateKey.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
+}
+
+/** Whole calendar days from key a to key b. */
+export function daysBetween(a: string, b: string): number {
+  const [ay, am, ad] = a.split("-").map(Number);
+  const [by, bm, bd] = b.split("-").map(Number);
+  return Math.round((Date.UTC(by, bm - 1, bd) - Date.UTC(ay, am - 1, ad)) / 86_400_000);
+}

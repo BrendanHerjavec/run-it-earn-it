@@ -9,13 +9,14 @@ import { formatCad, formatDuration, formatPace } from "./format";
 import { buyerFromUser, getProvider, type CheckoutProvider } from "./providers";
 import { getEffectiveSettings, getUser } from "./settings";
 import { budgetStatus, runStreakDays, weeklyDistanceM, type BudgetStatus } from "./stats";
+import { challengeProgress } from "./challenges";
 import { TIER_MAX_CENTS, tierAllows, type Tier } from "./tiers";
 
 export const SYSTEM_PROMPT = `You are the runner's hype coach inside "Run It, Earn It". When they finish a run that hits a goal, you pick ONE reward from their wishlist and write them a short message about why they earned it.
 
 How to work:
 1. Call get_run_summary, get_budget_status and list_wishlist to see the run, the money available, and the options.
-2. Pick the item that best fits this particular effort: a bigger or tougher run earns something better; a quest deserves something fun. Use the item notes.
+2. Pick the item that best fits this particular effort: a bigger or tougher run earns something better; a quest deserves something fun. Use the item notes. If the runner fixed this milestone's reward, only that item is eligible: pick it and focus on the message.
 3. Call choose_reward exactly once with the item's id and your message.
 
 Hard rules (the server enforces these; breaking them just wastes a turn):
@@ -98,10 +99,16 @@ async function eligibility(ctx: Ctx, item: WishlistItem) {
   const user = await getUser(ctx.db);
   const quote = await ctx.provider.quote(item, buyerFromUser(user));
   const reasons: string[] = [];
+  const pinned = ctx.goal.rewardItemId;
   if (!item.active) reasons.push("inactive");
-  if (!tierAllows(ctx.goal.rewardTier as Tier, item.tier as Tier)) reasons.push(`tier ${item.tier} is above this goal's ${ctx.goal.rewardTier} tier`);
-  if (item.expectedPriceCents > TIER_MAX_CENTS[ctx.goal.rewardTier as Tier])
-    reasons.push(`price is above the ${ctx.goal.rewardTier} tier limit of ${formatCad(TIER_MAX_CENTS[ctx.goal.rewardTier as Tier])}`);
+  if (pinned != null) {
+    // The runner fixed this milestone's reward: only that item, tier limits don't apply.
+    if (item.id !== pinned) reasons.push("this milestone's reward is fixed to a different item");
+  } else {
+    if (!tierAllows(ctx.goal.rewardTier as Tier, item.tier as Tier)) reasons.push(`tier ${item.tier} is above this goal's ${ctx.goal.rewardTier} tier`);
+    if (item.expectedPriceCents > TIER_MAX_CENTS[ctx.goal.rewardTier as Tier])
+      reasons.push(`price is above the ${ctx.goal.rewardTier} tier limit of ${formatCad(TIER_MAX_CENTS[ctx.goal.rewardTier as Tier])}`);
+  }
   if (quote.totalCents > ctx.budget.availableForNextOrderCents)
     reasons.push(`estimated total ${formatCad(quote.totalCents)} is over the ${formatCad(ctx.budget.availableForNextOrderCents)} available`);
   return { eligible: reasons.length === 0, reasons, quote };
@@ -116,6 +123,9 @@ async function runTool(ctx: Ctx, name: string, input: unknown): Promise<{ conten
         runStreakDays(db, activity.startTime, ctx.timeZone),
       ]);
       const goalMet = (await db.select().from(goals).where(eq(goals.id, goal.id)))[0];
+      const challenge = goalMet.challengeId
+        ? (await challengeProgress(db, activity.startTime, ctx.timeZone, goalMet.challengeId))[0]
+        : undefined;
       return {
         content: JSON.stringify({
           distance_km: +(activity.distanceM / 1000).toFixed(2),
@@ -131,6 +141,18 @@ async function runTool(ctx: Ctx, name: string, input: unknown): Promise<{ conten
             quest_radius_m: goalMet.radiusM,
             reward_tier: goalMet.rewardTier,
           },
+          ...(challenge
+            ? {
+                challenge: {
+                  name: challenge.challenge.name,
+                  window: challenge.window ? `${challenge.window.startKey} to ${challenge.window.endKey}` : null,
+                  total_km_so_far: +(challenge.totalM / 1000).toFixed(2),
+                  milestones_km: challenge.milestones.map((m) => m.km),
+                  this_milestone_km: goalMet.targetKm,
+                  reward_fixed_by_runner: goalMet.rewardItemId != null,
+                },
+              }
+            : {}),
           week_total_km: +(weekM / 1000).toFixed(2),
           streak_days: streak,
         }),

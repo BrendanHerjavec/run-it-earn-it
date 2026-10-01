@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState, useTransition } from "react";
 import type { RewardView } from "@/lib/reward-view";
 import type { QuestPin } from "@/components/QuestMap";
@@ -178,6 +179,16 @@ export function RewardLive({
           </span>
         </div>
         <h1 className="text-4xl font-black tracking-tight sm:text-6xl">{headline(view)}</h1>
+        {view.siblings.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <span className="text-muted">This run also unlocked:</span>
+            {view.siblings.map((s) => (
+              <Link key={s.id} href={`/rewards/${s.id}`} className="pill border-volt/40 px-3 py-1 text-volt">
+                {s.goalName ?? `Reward #${s.id}`} · {s.itemTitle ?? s.status.replaceAll("_", " ")}
+              </Link>
+            ))}
+          </div>
+        )}
         <Stepper view={view} />
       </header>
 

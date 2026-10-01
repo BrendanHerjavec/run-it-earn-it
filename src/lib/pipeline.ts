@@ -1,9 +1,9 @@
-import { and, eq, lte } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import type { DB } from "@/db";
 import { activities, rewardEvents, users, wishlistItems, type Activity } from "@/db/schema";
 import { config } from "./config";
 import { logEvent } from "./events";
-import { evaluateGoals, pickGoal, sanityCheck } from "./rules";
+import { evaluateGoals, sanityCheck, selectRewards } from "./rules";
 import { getEffectiveSettings, getUser } from "./settings";
 import { budgetStatus } from "./stats";
 import { fetchActivity as fetchFromStrava, getAccessToken, type StravaActivity, type StravaWebhookEvent } from "./strava";
@@ -15,7 +15,7 @@ export type Outcome =
   | { status: "no_goal"; reason: string; activityId: number }
   | { status: "duplicate"; reason: string; activityId: number; rewardEventId?: number }
   | { status: "skipped_budget"; reason: string; activityId: number; rewardEventId: number }
-  | { status: "reward_created"; reason: string; activityId: number; rewardEventId: number };
+  | { status: "reward_created"; reason: string; activityId: number; rewardEventId: number; rewardEventIds: number[] };
 
 export type PipelineDeps = {
   /** Injected in tests; defaults to the real Strava API with the stored user tokens. */
@@ -104,7 +104,14 @@ export async function storeActivity(db: DB, a: StravaActivity, source: "strava" 
   return { activity: row, created: false };
 }
 
-/** Rules engine + guardrails for one stored activity. Creates at most one RewardEvent, ever. */
+/** Rough tax-inclusive price used for budget checks before Claude picks (13% HST). */
+const withTax = (cents: number) => Math.round(cents * 1.13);
+
+/**
+ * Rules engine + guardrails for one stored activity. Creates at most one
+ * RewardEvent per goal per activity, ever (unique index), so retries and
+ * repeated syncs are safe. Several challenge milestones can unlock at once.
+ */
 export async function processActivity(db: DB, activity: Activity, deps: PipelineDeps = {}): Promise<Outcome> {
   const [prior] = await db.select().from(rewardEvents).where(eq(rewardEvents.activityId, activity.id));
   if (prior) {
@@ -121,61 +128,87 @@ export async function processActivity(db: DB, activity: Activity, deps: Pipeline
 
   const user = await getUser(db);
   const hits = await evaluateGoals(db, activity, user.timezone);
-  const hit = pickGoal(hits);
-  if (!hit) {
+  const selected = selectRewards(hits);
+  if (selected.length === 0) {
     await logEvent(db, { kind: "rules.no_goal", activityId: activity.id, message: "No active goal met" });
     return { status: "no_goal", reason: "No active goal met", activityId: activity.id };
   }
   await logEvent(db, {
     kind: "rules.goal_met",
     activityId: activity.id,
-    message: `${hit.goal.name}: ${hit.detail}`,
-    data: { hits: hits.map((h) => ({ goalId: h.goal.id, name: h.goal.name, detail: h.detail })), chosen: hit.goal.id },
+    message: selected.map((h) => `${h.goal.name}: ${h.detail}`).join(" · "),
+    data: { hits: hits.map((h) => ({ goalId: h.goal.id, name: h.goal.name, detail: h.detail })), selected: selected.map((h) => h.goal.id) },
   });
 
-  // Budget guardrail: is there at least one wishlist item this goal could pay for right now?
+  // Budget guardrail, applied across all unlocks from this run: each reward
+  // must have at least one item it could still afford after the earlier ones.
   const settings = await getEffectiveSettings(db);
   const budget = await budgetStatus(db, settings, new Date(), user.timezone);
-  const tierIdx = TIERS.indexOf(hit.goal.rewardTier);
-  const allowedTiers = TIERS.slice(0, tierIdx + 1);
-  const ceiling = Math.min(budget.availableForNextOrderCents, TIER_MAX_CENTS[hit.goal.rewardTier]);
-  const affordableInTier = (
-    await db
-      .select({ tier: wishlistItems.tier })
-      .from(wishlistItems)
-      .where(and(eq(wishlistItems.active, true), lte(wishlistItems.expectedPriceCents, ceiling)))
-  ).some((r) => allowedTiers.includes(r.tier));
+  const items = await db.select().from(wishlistItems).where(eq(wishlistItems.active, true));
+  // Each reward must fit the per-order cap on its own; together they draw down the daily and weekly budgets.
+  let dailyLeft = budget.remainingDailyCents;
+  let weeklyLeft = budget.remainingWeeklyCents;
+  const availableNow = () => Math.min(budget.maxOrderCents, dailyLeft, weeklyLeft);
 
-  const status = affordableInTier ? "pending_agent" : "skipped_budget";
-  const [created] = await db
-    .insert(rewardEvents)
-    .values({
+  const created: { id: number; detail: string }[] = [];
+  const skipped: { id: number; reason: string }[] = [];
+  for (const hit of selected) {
+    const tierIdx = TIERS.indexOf(hit.goal.rewardTier);
+    const candidates = hit.goal.rewardItemId
+      ? items.filter((i) => i.id === hit.goal.rewardItemId)
+      : items.filter((i) => TIERS.indexOf(i.tier) <= tierIdx && i.expectedPriceCents <= TIER_MAX_CENTS[hit.goal.rewardTier]);
+    const cheapest = Math.min(...candidates.map((i) => withTax(i.expectedPriceCents)));
+    const available = availableNow();
+    const fits = Number.isFinite(cheapest) && cheapest <= available;
+    const failureReason = fits
+      ? null
+      : hit.goal.rewardItemId
+        ? candidates.length
+          ? `This milestone's reward costs about ${(cheapest / 100).toFixed(2)} CAD; only ${(available / 100).toFixed(2)} CAD left`
+          : "This milestone's reward item is no longer on the wishlist"
+        : `No wishlist item fits: ${(available / 100).toFixed(2)} CAD available for a ${hit.goal.rewardTier} reward`;
+
+    const [row] = await db
+      .insert(rewardEvents)
+      .values({
+        activityId: activity.id,
+        goalId: hit.goal.id,
+        status: fits ? "pending_agent" : "skipped_budget",
+        autoApprove: deps.autoApprove ?? false,
+        failureReason,
+      })
+      .onConflictDoNothing({ target: [rewardEvents.activityId, rewardEvents.goalId] })
+      .returning();
+    if (!row) continue; // a concurrent delivery already created it
+
+    await logEvent(db, {
+      kind: "reward.created",
+      rewardEventId: row.id,
       activityId: activity.id,
-      goalId: hit.goal.id,
-      status,
-      autoApprove: deps.autoApprove ?? false,
-      failureReason: affordableInTier ? null : `No wishlist item fits: ${(ceiling / 100).toFixed(2)} CAD available for a ${hit.goal.rewardTier} reward`,
-    })
-    .onConflictDoNothing({ target: rewardEvents.activityId })
-    .returning();
-
-  if (!created) {
-    // Lost a race with a concurrent webhook delivery for the same activity.
-    const [row] = await db.select().from(rewardEvents).where(eq(rewardEvents.activityId, activity.id));
-    return { status: "duplicate", reason: "Reward already exists for this activity", activityId: activity.id, rewardEventId: row?.id };
+      message: `Reward event ${row.id} (${hit.goal.name}) → ${row.status}`,
+      data: { goal: hit.goal.name, budget, availableForThis: available },
+    });
+    if (fits) {
+      dailyLeft -= cheapest;
+      weeklyLeft -= cheapest;
+      created.push({ id: row.id, detail: hit.detail });
+    } else {
+      skipped.push({ id: row.id, reason: failureReason ?? "" });
+    }
   }
 
-  await logEvent(db, {
-    kind: "reward.created",
-    rewardEventId: created.id,
-    activityId: activity.id,
-    message: `Reward event ${created.id} → ${status}`,
-    data: { goal: hit.goal.name, budget },
-  });
+  for (const c of created) await deps.onRewardCreated?.(db, c.id);
 
-  if (status === "skipped_budget") {
-    return { status: "skipped_budget", reason: created.failureReason ?? "", activityId: activity.id, rewardEventId: created.id };
+  if (created.length) {
+    return {
+      status: "reward_created",
+      reason: created.map((c) => c.detail).join(" · "),
+      activityId: activity.id,
+      rewardEventId: created[0].id,
+      rewardEventIds: created.map((c) => c.id),
+    };
   }
-  await deps.onRewardCreated?.(db, created.id);
-  return { status: "reward_created", reason: hit.detail, activityId: activity.id, rewardEventId: created.id };
+  if (skipped.length) return { status: "skipped_budget", reason: skipped[0].reason, activityId: activity.id, rewardEventId: skipped[0].id };
+  const [row] = await db.select().from(rewardEvents).where(eq(rewardEvents.activityId, activity.id));
+  return { status: "duplicate", reason: "Reward already exists for this activity", activityId: activity.id, rewardEventId: row?.id };
 }
