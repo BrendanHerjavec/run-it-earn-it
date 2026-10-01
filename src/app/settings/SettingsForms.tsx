@@ -52,8 +52,9 @@ export function LimitsForm({ env, row }: LimitsProps) {
           <span className="label">Checkout provider</span>
           <select name="provider" defaultValue={row.provider ?? ""} className="input mt-1">
             <option value="">Use env ({env.provider})</option>
+            <option value="cart">Cart link: opens the store checkout, you click Pay (recommended)</option>
             <option value="mock">Mock (simulated, no money)</option>
-            <option value="browser">Browser agent (Claude drives Chrome on this PC)</option>
+            <option value="browser">Browser agent (experimental; may break some stores&apos; terms)</option>
             <option value="crossmint">Crossmint (real purchases)</option>
             <option value="rye">Rye (US addresses only)</option>
           </select>

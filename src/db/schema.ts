@@ -70,7 +70,7 @@ export const settings = pgTable("settings", {
   autoBuyMaxCents: integer("auto_buy_max_cents"),
   /** When false (default) every purchase needs a tap on Approve. Also requires AUTO_BUY env. */
   autoBuy: boolean("auto_buy").notNull().default(false),
-  provider: text("provider").$type<"mock" | "browser" | "crossmint" | "rye">(),
+  provider: text("provider").$type<"mock" | "cart" | "browser" | "crossmint" | "rye">(),
   crossmintBuyerProfileId: text("crossmint_buyer_profile_id"),
   crossmintPaymentMethodId: text("crossmint_payment_method_id"),
   /** OAuth client registered dynamically with COROS for this app's redirect URI. */

@@ -1,6 +1,6 @@
 import type { WishlistItem } from "@/db/schema";
 
-export type ProviderName = "mock" | "browser" | "crossmint" | "rye";
+export type ProviderName = "mock" | "cart" | "browser" | "crossmint" | "rye";
 
 export type Buyer = {
   name: string;
@@ -42,6 +42,8 @@ export type CheckoutStatus = {
   receipt?: unknown;
   failureReason?: string;
   liveViewUrl?: string;
+  /** Cart-link checkout: the store page we opened for the runner to pay on. */
+  handoffUrl?: string;
   /** Dry run: the agent reached the review page and stopped without placing the order. */
   dryRun?: boolean;
 };

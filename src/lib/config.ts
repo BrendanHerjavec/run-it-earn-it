@@ -38,7 +38,7 @@ const schema = z.object({
   NTFY_TOKEN: z.string().default(""),
   APPROVAL_SIGNING_SECRET: z.string().default(""),
   TOKEN_ENCRYPTION_KEY: z.string().default(""),
-  CHECKOUT_PROVIDER: z.enum(["mock", "browser", "crossmint", "rye"]).default("mock"),
+  CHECKOUT_PROVIDER: z.enum(["mock", "cart", "browser", "crossmint", "rye"]).default("cart"),
   /** Model for the local browser checkout agent. */
   BROWSER_AGENT_MODEL: z.string().default("claude-sonnet-5"),
   /** Chrome profile the checkout agent uses; sign in to your store here once. */

@@ -7,7 +7,7 @@ import type { QuestPin } from "@/components/QuestMap";
 import { formatCad, formatDuration, formatKm, formatPace } from "@/lib/format";
 import { decodePolyline } from "@/lib/geo";
 import { RouteMap } from "./RouteMap";
-import { approveAction, cancelAction, resumeAction, retryAgentAction, skipAction } from "./actions";
+import { approveAction, cancelAction, confirmPurchaseAction, resumeAction, retryAgentAction, skipAction } from "./actions";
 
 const STAGES = [
   { key: "run", label: "Run", short: "Run" },
@@ -87,6 +87,42 @@ function UnlockOverlay({ view, onDone }: { view: RewardView; onDone: () => void 
         <p className="unlock-pop mt-6 text-3xl font-bold tabular-nums text-muted" style={{ animationDelay: "320ms" }}>
           {formatKm(view.activity.distanceM, 2)} · {formatPace(view.activity.movingTimeS, view.activity.distanceM)}
         </p>
+      </div>
+    </div>
+  );
+}
+
+/** Cart-link checkout: the store's checkout is open in your browser; you pay, then tell the app. */
+function CartReady({ view, pending, act }: { view: RewardView; pending: boolean; act: (fn: (id: number) => Promise<{ ok: boolean; error?: string }>) => void }) {
+  const [total, setTotal] = useState(view.quotedTotalCents ? (view.quotedTotalCents / 100).toFixed(2) : "");
+  const [order, setOrder] = useState("");
+  return (
+    <div className="card border-volt/40">
+      <p className="eyebrow text-volt">Your cart is ready</p>
+      <p className="mt-2 text-2xl font-bold">Finish paying in your browser</p>
+      <p className="mt-1 text-muted">{view.checkout?.needsInput?.question}</p>
+      {view.checkout?.handoffUrl && (
+        <a href={view.checkout.handoffUrl} target="_blank" rel="noreferrer" className="btn-primary mt-4 px-6 py-3 text-lg">
+          Open checkout ↗
+        </a>
+      )}
+      <div className="mt-6 grid gap-3 border-t border-line pt-5 sm:grid-cols-3">
+        <label>
+          <span className="label">Total paid (CAD)</span>
+          <input value={total} onChange={(e) => setTotal(e.target.value)} inputMode="decimal" className="input mt-1 tabular-nums" />
+        </label>
+        <label className="sm:col-span-2">
+          <span className="label">Order number (optional)</span>
+          <input value={order} onChange={(e) => setOrder(e.target.value)} className="input mt-1" />
+        </label>
+      </div>
+      <div className="mt-4 flex flex-wrap gap-3">
+        <button disabled={pending} onClick={() => act((id) => confirmPurchaseAction(id, true, total, order))} className="btn-primary px-6 py-3">
+          I placed the order
+        </button>
+        <button disabled={pending} onClick={() => act((id) => confirmPurchaseAction(id, false))} className="btn px-6 py-3">
+          I didn&apos;t buy it
+        </button>
       </div>
     </div>
   );
@@ -267,14 +303,19 @@ export function RewardLive({
             <div className="card border-warn/40 text-warn">{view.failureReason}</div>
           )}
 
+          {view.status === "checking_out" && view.checkout?.state === "awaiting_input" && view.checkout.handoffUrl && (
+            <CartReady view={view} pending={pending} act={act} />
+          )}
           {(view.checkout || view.status === "checking_out") && (
             <div className="card">
               <div className="flex items-center justify-between">
-                <p className="eyebrow">Checkout · {view.provider === "browser" ? "Claude in Chrome on this PC" : view.provider}</p>
+                <p className="eyebrow">
+                  Checkout · {view.provider === "browser" ? "Claude in Chrome on this PC" : view.provider === "cart" ? "store's own checkout, you pay" : view.provider}
+                </p>
                 {view.provider === "mock" && <span className="pill text-muted">simulated, no money</span>}
                 {view.provider === "browser" && <span className="pill text-muted">watch the Chrome window</span>}
               </div>
-              {view.checkout?.state === "awaiting_input" && (
+              {view.checkout?.state === "awaiting_input" && !view.checkout.handoffUrl && (
                 <div className="mt-4 rounded-xl border border-warn/50 bg-warn/10 p-4">
                   <p className="font-semibold text-warn">The agent needs you in the browser window</p>
                   <p className="mt-1">{view.checkout.needsInput?.question}</p>

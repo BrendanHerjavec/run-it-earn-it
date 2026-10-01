@@ -4,7 +4,7 @@ Finish a run that hits a goal → a Claude agent picks a reward from your wishli
 
 Single-user app. Next.js 16 (App Router) + TypeScript + Drizzle/Postgres, deployed on Vercel.
 
-> **Status:** Runs locally on your PC. Press **Sync runs** → new COROS runs are checked → if one hits a goal: unlock animation → Claude picks a reward → 10 s countdown (Cancel) → a Claude browser agent buys it in a visible Chrome window, using your store account's saved card → receipt. Dry-run mode (the default) stops before placing the order.
+> **Status:** Runs locally on your PC. Set up a **challenge** (e.g. Weekly 20K with 5 / 10 / 20 km milestones). Press **Sync runs**: new COROS runs are pulled in, and each milestone you cross unlocks a reward. Claude picks it, a 10 s countdown runs (Cancel), then the app opens the **store's own checkout link** in your browser with the item in the cart and your address filled in. You click Pay, then tell the app "I placed the order".
 
 ## How a run becomes a reward
 
@@ -50,7 +50,25 @@ npm run strava:webhook -- create https://YOUR-PUBLIC-URL/api/strava/webhook
 
 `npm run strava:webhook -- view` / `-- delete <id>` manage it. Strava allows one subscription per app.
 
-## Buying with the local browser agent
+## Challenges
+
+**Goals → New challenge:** a name, start date, length (default 7 days), repeat weekly, and up to 6 distance milestones. Each milestone is either **fixed** to a wishlist item ("20 km → the vest") or **Claude picks** within a price tier. Every milestone crossed in the window unlocks its own reward, and one long run can unlock several. They're processed one after another. The budget caps apply across all of them.
+
+## Buying: cart links (default, terms-safe)
+
+`CHECKOUT_PROVIDER=cart`. Nothing automates the store; the app only opens official links in your normal browser:
+
+- **Shopify stores** (most Canadian running and outdoor brands): reads `/products/{handle}.js` for the variant matching the item's notes (or `?variant=` in the URL), plus its live price and stock. It then opens a [cart permalink](https://help.shopify.com/en/manual/products/details/cart-permalink) (`/cart/VARIANT:1?checkout[email]=…&checkout[shipping_address][…]=…`), which is the store's own checkout with your address prefilled.
+- **Amazon.ca**: the official add-to-cart URL `/gp/aws/cart/add.html?ASIN.1=…&Quantity.1=1`.
+- **Anything else**: the product page.
+
+You pay, then click **I placed the order** (optionally with the total and order number), or **I didn't buy it**. The ledger settles at what you paid, or is released.
+
+Why not a bot? Retailers such as Best Buy, Walmart and Amazon prohibit automated agents browsing their sites, even if a person clicks Pay. Cart links are the stores' own sanctioned mechanism.
+
+## Buying with the local browser agent (experimental)
+
+This may breach some stores' terms; prefer cart links.
 
 `CHECKOUT_PROVIDER=browser` (or pick **Browser agent** in Settings). Claude drives Chrome through Microsoft's [Playwright MCP](https://github.com/microsoft/playwright-mcp) server, using a dedicated profile in `.data/shopping-profile`.
 

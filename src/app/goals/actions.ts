@@ -73,7 +73,7 @@ export async function deleteGoal(form: FormData) {
 
 const challengeSchema = z.object({
   name: z.string().trim().min(1).max(100),
-  startsOn: z.string().regex(/^d{4}-d{2}-d{2}$/, "pick a start date"),
+  startsOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "pick a start date"),
   lengthDays: z.coerce.number().int().min(1).max(60),
   repeats: z.boolean(),
   milestones: z

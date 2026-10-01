@@ -4,7 +4,10 @@ import { getEffectiveSettings, getUser } from "@/lib/settings";
 import { formatCad } from "@/lib/format";
 import { LimitsForm, ProfileForm, ShoppingBrowser } from "./SettingsForms";
 import { browserOpen } from "@/lib/browser/session";
-import { disconnectCoros, disconnectStrava } from "./actions";
+import { deleteDemoRuns, disconnectCoros, disconnectStrava } from "./actions";
+import { getDb } from "@/db";
+import { activities } from "@/db/schema";
+import { eq, count } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
 
@@ -21,6 +24,7 @@ function Flag({ on, label, dangerWhenOn }: { on: boolean; label: string; dangerW
 export default async function SettingsPage({ searchParams }: { searchParams: Promise<{ strava?: string; coros?: string }> }) {
   const [s, user, { strava, coros }] = await Promise.all([getEffectiveSettings(), getUser(), searchParams]);
   const c = config();
+  const [{ n: demoRuns }] = await (await getDb()).select({ n: count() }).from(activities).where(eq(activities.source, "simulated"));
 
   return (
     <AppShell>
@@ -123,6 +127,18 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
             </div>
           )}
         </section>
+
+        {demoRuns > 0 && (
+          <section className="card">
+            <h2 className="mb-1 text-lg font-semibold">Demo data</h2>
+            <p className="mb-4 text-sm text-muted">
+              {demoRuns} simulated run{demoRuns === 1 ? "" : "s"} count toward your totals and challenges. Delete them (and their rewards) before tracking real runs.
+            </p>
+            <form action={deleteDemoRuns}>
+              <button className="btn-danger">Delete demo runs</button>
+            </form>
+          </section>
+        )}
 
         <section className="card">
           <h2 className="mb-1 text-lg font-semibold">Profile & shipping</h2>

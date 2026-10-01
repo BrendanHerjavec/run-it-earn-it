@@ -8,6 +8,7 @@ import { settings, users } from "@/db/schema";
 import { requireAuth } from "@/lib/auth";
 import { parseDollarsToCents } from "@/lib/format";
 import { closeBrowser, getBrowser } from "@/lib/browser/session";
+import { deleteDemoData } from "@/lib/demo";
 import { getSettingsRow, getUser } from "@/lib/settings";
 
 export type FormState = { error?: string; ok?: boolean };
@@ -25,7 +26,7 @@ export async function saveLimits(_prev: FormState, form: FormData): Promise<Form
       maxWeeklyCents: parseDollarsToCents(form.get("maxWeekly")),
       autoBuyMaxCents: parseDollarsToCents(form.get("autoBuyMax")),
       autoBuy: form.get("autoBuy") === "on",
-      provider: provider === "mock" || provider === "browser" || provider === "crossmint" || provider === "rye" ? provider : null,
+      provider: provider === "mock" || provider === "cart" || provider === "browser" || provider === "crossmint" || provider === "rye" ? provider : null,
       crossmintBuyerProfileId: String(form.get("crossmintBuyerProfileId") ?? "").trim() || null,
     })
     .where(eq(settings.id, 1));
@@ -101,4 +102,12 @@ export async function closeShoppingBrowser() {
   await requireAuth();
   await closeBrowser();
   revalidatePath("/settings");
+}
+
+export async function deleteDemoRuns() {
+  await requireAuth();
+  await deleteDemoData(await getDb());
+  revalidatePath("/settings");
+  revalidatePath("/");
+  revalidatePath("/goals");
 }

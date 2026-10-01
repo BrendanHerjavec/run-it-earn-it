@@ -51,7 +51,7 @@ export default async function Home() {
         <span className={`pill ${s.purchasesEnabled ? "border-bad/50 text-bad" : "text-muted"}`}>
           purchases {s.purchasesEnabled ? "LIVE" : "off"}
         </span>
-        <span className="pill text-muted">provider: {s.purchasesEnabled ? s.provider : "mock"}</span>
+        <span className="pill text-muted">checkout: {s.provider === "cart" ? "cart link (you pay)" : s.provider === "browser" ? (s.purchasesEnabled ? "browser agent" : "browser agent (dry run)") : s.purchasesEnabled ? s.provider : "mock"}</span>
         <span className="pill text-muted">{s.autoBuy ? "auto-buy" : "approval mode"}</span>
       </div>
 

@@ -4,7 +4,8 @@ import { after } from "next/server";
 import { getDb } from "@/db";
 import { requireAuth } from "@/lib/auth";
 import { logEvent } from "@/lib/events";
-import { approveReward, cancelCheckout, resumeCheckout, retryAgent, runCheckoutLoop, runRewardAgent, skipReward } from "@/lib/rewards";
+import { approveReward, cancelCheckout, confirmPurchase, resumeCheckout, retryAgent, runCheckoutLoop, runRewardAgent, skipReward } from "@/lib/rewards";
+import { parseDollarsToCents } from "@/lib/format";
 
 export type ActionResult = { ok: boolean; error?: string };
 
@@ -48,4 +49,14 @@ export async function resumeAction(id: number): Promise<ActionResult> {
   await requireAuth();
   const ok = await resumeCheckout(await getDb(), id, "I've handled it in the browser");
   return ok ? { ok } : { ok, error: "This checkout isn't waiting for you" };
+}
+
+export async function confirmPurchaseAction(id: number, placed: boolean, total?: string, orderNumber?: string): Promise<ActionResult> {
+  await requireAuth();
+  const ok = await confirmPurchase(await getDb(), id, {
+    placed,
+    totalCents: parseDollarsToCents(total ?? null) ?? undefined,
+    orderNumber: orderNumber?.trim().slice(0, 64) || undefined,
+  });
+  return ok ? { ok } : { ok, error: "This reward isn't waiting at checkout" };
 }

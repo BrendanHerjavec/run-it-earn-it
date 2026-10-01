@@ -122,3 +122,21 @@ describe("5 / 10 / 20 km challenge", () => {
     expect(byGoal[goalIds[10]]).toBe("skipped_budget");
   });
 });
+
+describe("demo data", () => {
+  it("deleting demo runs removes them and their rewards, keeps real runs", async () => {
+    const { deleteDemoData } = await import("@/lib/demo");
+    const db = await freshDb();
+    await seedWishlist(db);
+    const { addGoal } = await import("./helpers");
+    await addGoal(db, { type: "single_run_distance", targetKm: 5 });
+    const { activity: fake } = await storeActivity(db, { ...stravaRun({ distance: 6000 }), id: -1 }, "simulated");
+    const { activity: real } = await storeActivity(db, stravaRun({ distance: 6000 }), "strava");
+    await processActivity(db, fake);
+    await processActivity(db, real);
+    expect(await deleteDemoData(db)).toEqual({ runs: 1, rewards: 1 });
+    const { activities } = await import("@/db/schema");
+    expect((await db.select().from(activities)).map((a) => a.source)).toEqual(["strava"]);
+    expect(await db.select().from(rewardEvents)).toHaveLength(1);
+  });
+});

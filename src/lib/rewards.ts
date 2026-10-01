@@ -260,7 +260,9 @@ export async function advanceCheckout(db: DB, id: number, deps: RewardDeps = {})
   if (st.state === "awaiting_input" && prevState !== "awaiting_input") {
     await notify(
       db,
-      { title: "🖐️ Checkout needs you", message: st.needsInput?.question ?? "Check the browser window", priority: 4, click: rewardPageUrl(id) },
+      st.handoffUrl
+        ? { title: "🛒 Your cart is ready", message: `${item?.title}: finish paying in your browser`, priority: 4, click: st.handoffUrl }
+        : { title: "🖐️ Checkout needs you", message: st.needsInput?.question ?? "Check the browser window", priority: 4, click: rewardPageUrl(id) },
       { rewardEventId: id },
     );
   }
@@ -282,7 +284,8 @@ export async function advanceCheckout(db: DB, id: number, deps: RewardDeps = {})
     return "completed";
   }
   if (st.state === "completed") {
-    const total = st.totalCents ?? 0;
+    // Cart checkouts: you may not enter the exact total; fall back to the quote.
+    const total = st.totalCents ?? event.quotedTotalCents ?? 0;
     const cap = event.maxSpendCents ?? 0;
     if (total > cap) {
       // The provider is supposed to make this impossible. Record it loudly.
@@ -311,6 +314,12 @@ export async function advanceCheckout(db: DB, id: number, deps: RewardDeps = {})
     }
     return "completed";
   }
+  if (st.state === "cancelled" && st.failureReason === "Not purchased") {
+    // You chose not to buy it at checkout: no failure, just a skipped reward.
+    const row = await transition(db, id, ["checking_out"], "rejected", { completedAt: new Date() }, "you didn't buy it");
+    if (row) await db.update(spendLedger).set({ kind: "released" }).where(eq(spendLedger.rewardEventId, id));
+    return "rejected";
+  }
   if (st.state === "failed" || st.state === "cancelled") {
     await fail(db, id, ["checking_out"], st.failureReason ?? `Checkout ${st.state}`);
     return "failed";
@@ -328,6 +337,27 @@ export async function runCheckoutLoop(db: DB, id: number, deps: RewardDeps = {},
     await sleep(opts.intervalMs);
   }
   return "checking_out" as const;
+}
+
+/** Cart-link checkout: you tell the app whether you placed the order (and optionally the total). */
+export async function confirmPurchase(
+  db: DB,
+  id: number,
+  c: { placed: boolean; totalCents?: number; orderNumber?: string },
+  deps: RewardDeps = {},
+): Promise<boolean> {
+  const row = await load(db, id);
+  if (!row || row.event.status !== "checking_out" || !row.event.providerRunId) return false;
+  const provider = deps.provider ?? providerByName(row.event.provider ?? "mock", await getEffectiveSettings(db));
+  if (!provider.respond) return false;
+  await provider.respond(row.event.providerRunId, c);
+  await logEvent(db, {
+    kind: "checkout.confirmed",
+    rewardEventId: id,
+    message: c.placed ? `You placed the order${c.totalCents ? ` (${formatCad(c.totalCents)})` : ""}` : "You didn't buy it",
+  });
+  await advanceCheckout(db, id, deps);
+  return true;
 }
 
 /** The runner fixed something in the browser (signed in, entered a code); let the agent continue. */

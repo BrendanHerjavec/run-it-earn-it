@@ -10,7 +10,7 @@ export type EffectiveSettings = {
   autoBuyMaxCents: number;
   /** True only if BOTH the AUTO_BUY env flag and the settings toggle are on. */
   autoBuy: boolean;
-  provider: "mock" | "browser" | "crossmint" | "rye";
+  provider: "mock" | "cart" | "browser" | "crossmint" | "rye";
   /** Env-only kill switch. When false the real providers are never called. */
   purchasesEnabled: boolean;
   env: {
@@ -19,7 +19,7 @@ export type EffectiveSettings = {
     maxWeeklyCents: number;
     autoBuyMaxCents: number;
     autoBuy: boolean;
-    provider: "mock" | "browser" | "crossmint" | "rye";
+    provider: "mock" | "cart" | "browser" | "crossmint" | "rye";
   };
   row: Settings;
 };
