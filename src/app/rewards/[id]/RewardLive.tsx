@@ -7,6 +7,7 @@ import type { QuestPin } from "@/components/QuestMap";
 import { formatCad, formatDuration, formatKm, formatPace } from "@/lib/format";
 import { decodePolyline } from "@/lib/geo";
 import { RouteMap } from "./RouteMap";
+import { CartReady, CheckoutPanel, Countdown, Receipt } from "@/components/CheckoutBits";
 import { approveAction, cancelAction, confirmPurchaseAction, resumeAction, retryAgentAction, skipAction } from "./actions";
 
 const STAGES = [
@@ -22,6 +23,7 @@ function stageIndex(v: RewardView): number {
     case "pending_agent":
       return 1;
     case "awaiting_approval":
+    case "in_basket":
       return 2;
     case "approved":
     case "checking_out":
@@ -33,7 +35,7 @@ function stageIndex(v: RewardView): number {
   }
 }
 
-const TERMINAL = ["completed", "failed", "rejected", "skipped_budget"];
+const TERMINAL = ["completed", "failed", "rejected", "skipped_budget", "in_basket"];
 
 function Stepper({ view }: { view: RewardView }) {
   const at = stageIndex(view);
@@ -88,62 +90,6 @@ function UnlockOverlay({ view, onDone }: { view: RewardView; onDone: () => void 
           {formatKm(view.activity.distanceM, 2)} · {formatPace(view.activity.movingTimeS, view.activity.distanceM)}
         </p>
       </div>
-    </div>
-  );
-}
-
-/** Cart-link checkout: the store's checkout is open in your browser; you pay, then tell the app. */
-function CartReady({ view, pending, act }: { view: RewardView; pending: boolean; act: (fn: (id: number) => Promise<{ ok: boolean; error?: string }>) => void }) {
-  const [total, setTotal] = useState(view.quotedTotalCents ? (view.quotedTotalCents / 100).toFixed(2) : "");
-  const [order, setOrder] = useState("");
-  return (
-    <div className="card border-volt/40">
-      <p className="eyebrow text-volt">Your cart is ready</p>
-      <p className="mt-2 text-2xl font-bold">Finish paying in your browser</p>
-      <p className="mt-1 text-muted">{view.checkout?.needsInput?.question}</p>
-      {view.checkout?.handoffUrl && (
-        <a href={view.checkout.handoffUrl} target="_blank" rel="noreferrer" className="btn-primary mt-4 px-6 py-3 text-lg">
-          Open checkout ↗
-        </a>
-      )}
-      <div className="mt-6 grid gap-3 border-t border-line pt-5 sm:grid-cols-3">
-        <label>
-          <span className="label">Total paid (CAD)</span>
-          <input value={total} onChange={(e) => setTotal(e.target.value)} inputMode="decimal" className="input mt-1 tabular-nums" />
-        </label>
-        <label className="sm:col-span-2">
-          <span className="label">Order number (optional)</span>
-          <input value={order} onChange={(e) => setOrder(e.target.value)} className="input mt-1" />
-        </label>
-      </div>
-      <div className="mt-4 flex flex-wrap gap-3">
-        <button disabled={pending} onClick={() => act((id) => confirmPurchaseAction(id, true, total, order))} className="btn-primary px-6 py-3">
-          I placed the order
-        </button>
-        <button disabled={pending} onClick={() => act((id) => confirmPurchaseAction(id, false))} className="btn px-6 py-3">
-          I didn&apos;t buy it
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function Countdown({ at, onCancel, pending }: { at: string; onCancel: () => void; pending: boolean }) {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 200);
-    return () => clearInterval(t);
-  }, []);
-  const left = Math.max(0, Math.ceil((Date.parse(at) - now) / 1000));
-  return (
-    <div className="card flex flex-wrap items-center justify-between gap-4 border-volt/40">
-      <div className="flex items-center gap-5">
-        <span key={left} className="countdown-tick text-6xl font-black tabular-nums text-volt">{left}</span>
-        <p className="text-xl">{left > 0 ? "Buying it in a moment…" : "Starting checkout…"}</p>
-      </div>
-      <button disabled={pending || left === 0} onClick={onCancel} className="btn px-6 py-3 text-lg">
-        Cancel
-      </button>
     </div>
   );
 }
@@ -299,64 +245,53 @@ export function RewardLive({
             </div>
           )}
           {error && <p className="text-bad">{error}</p>}
+          {view.status === "in_basket" && (
+            <div className="card border-volt/30">
+              <p className="eyebrow text-volt">In this week&apos;s basket</p>
+              <p className="mt-2 text-xl">
+                Ordered together with the rest of the week&apos;s rewards when the challenge week ends, so the shipping&apos;s free.
+              </p>
+              <div className="mt-4 flex flex-wrap gap-3">
+                {view.orderId ? (
+                  <Link href={`/orders/${view.orderId}`} className="btn-primary">
+                    View the order →
+                  </Link>
+                ) : (
+                  <Link href="/" className="btn">
+                    See the basket
+                  </Link>
+                )}
+              </div>
+            </div>
+          )}
           {view.failureReason && view.status !== "pending_agent" && (
             <div className="card border-warn/40 text-warn">{view.failureReason}</div>
           )}
 
           {view.status === "checking_out" && view.checkout?.state === "awaiting_input" && view.checkout.handoffUrl && (
-            <CartReady view={view} pending={pending} act={act} />
+            <CartReady
+              checkout={view.checkout}
+              quotedTotalCents={view.quotedTotalCents}
+              pending={pending}
+              onConfirm={(placed, total, order) => act((id) => confirmPurchaseAction(id, placed, total, order))}
+            />
           )}
           {(view.checkout || view.status === "checking_out") && (
-            <div className="card">
-              <div className="flex items-center justify-between">
-                <p className="eyebrow">
-                  Checkout · {view.provider === "browser" ? "Claude in Chrome on this PC" : view.provider === "cart" ? "store's own checkout, you pay" : view.provider}
-                </p>
-                {view.provider === "mock" && <span className="pill text-muted">simulated, no money</span>}
-                {view.provider === "browser" && <span className="pill text-muted">watch the Chrome window</span>}
-              </div>
-              {view.checkout?.state === "awaiting_input" && !view.checkout.handoffUrl && (
-                <div className="mt-4 rounded-xl border border-warn/50 bg-warn/10 p-4">
-                  <p className="font-semibold text-warn">The agent needs you in the browser window</p>
-                  <p className="mt-1">{view.checkout.needsInput?.question}</p>
-                  <button disabled={pending} onClick={() => act(resumeAction)} className="btn-primary mt-3">
-                    Done, continue
-                  </button>
-                </div>
-              )}
+            <>
               {view.liveViewUrl && (
-                <iframe src={view.liveViewUrl} className="mt-4 aspect-video w-full rounded-xl border border-line bg-black" title="Live checkout" />
+                <iframe src={view.liveViewUrl} className="aspect-video w-full rounded-xl border border-line bg-black" title="Live checkout" />
               )}
-              <ol className="mt-4 space-y-2">
-                {(view.checkout?.steps ?? []).map((s, i, all) => {
-                  const current = i === all.length - 1 && view.status === "checking_out";
-                  return (
-                    <li key={s.label} className="flex items-center gap-3 text-lg">
-                      <span className={`size-2.5 rounded-full ${current ? "animate-pulse bg-volt" : "bg-good"}`} />
-                      <span className={current ? "text-fg" : "text-muted"}>{s.label}</span>
-                    </li>
-                  );
-                })}
-              </ol>
-            </div>
+              <CheckoutPanel
+                checkout={view.checkout}
+                provider={view.provider}
+                live={view.status === "checking_out"}
+                pending={pending}
+                onResume={() => act(resumeAction)}
+              />
+            </>
           )}
 
-          {view.status === "completed" && isDryRun(view) && (
-            <div className="card border-warn/40">
-              <p className="eyebrow text-warn">Dry run: no order placed</p>
-              <p className="mt-2 text-4xl font-black tabular-nums">{formatCad((view.receipt as { totalCents?: number }).totalCents)}</p>
-              <p className="mt-1 text-muted">The agent reached the review page and stopped. Set PURCHASES_ENABLED=true to buy for real.</p>
-            </div>
-          )}
-          {view.status === "completed" && !isDryRun(view) && (
-            <div className="card border-good/40">
-              <p className="eyebrow text-good">Receipt</p>
-              <p className="mt-2 text-4xl font-black tabular-nums">{formatCad(view.totalChargedCents)}</p>
-              <pre className="mt-4 overflow-x-auto rounded-lg bg-surface-2 p-4 font-mono text-xs text-muted">
-                {JSON.stringify(view.receipt, null, 2)}
-              </pre>
-            </div>
-          )}
+          {view.status === "completed" && <Receipt receipt={view.receipt} totalChargedCents={view.totalChargedCents} />}
 
           {view.transcript && (
             <details className="card">

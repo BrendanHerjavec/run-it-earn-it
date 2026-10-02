@@ -86,6 +86,11 @@ type Ctx = {
   budget: BudgetStatus;
   provider: CheckoutProvider;
   timeZone: string;
+  /**
+   * Fancier the further you go: a milestone must pick something pricier than
+   * the previous milestone's limit, when the wishlist has such an item.
+   */
+  priceFloorCents?: number;
   /** Basket challenges: picks already waiting for this window's order (before tax). */
   basket?: { titles: string[]; cents: number };
   chosen?: { itemId: number; message: string; quotedTotalCents: number };
@@ -122,6 +127,8 @@ async function eligibility(ctx: Ctx, item: WishlistItem) {
   } else if (ctx.goal.maxPriceCents != null) {
     // Milestone price limit, e.g. "up to a $40 bag" for the 20 km reward.
     if (item.expectedPriceCents > ctx.goal.maxPriceCents) reasons.push(`price is above this milestone's ${formatCad(ctx.goal.maxPriceCents)} limit`);
+    if (ctx.priceFloorCents != null && item.expectedPriceCents <= ctx.priceFloorCents)
+      reasons.push(`this milestone should be fancier than the last one: pick something over ${formatCad(ctx.priceFloorCents)}`);
   } else {
     if (!tierAllows(ctx.goal.rewardTier as Tier, item.tier as Tier)) reasons.push(`tier ${item.tier} is above this goal's ${ctx.goal.rewardTier} tier`);
     if (item.expectedPriceCents > TIER_MAX_CENTS[ctx.goal.rewardTier as Tier])
@@ -190,6 +197,7 @@ async function runTool(ctx: Ctx, name: string, input: unknown): Promise<{ conten
           max_for_this_reward_incl_tax: formatCad(ceilingCents(ctx)),
           reward_tier: goal.rewardTier,
           price_limit_for_this_reward: formatCad(priceLimitCents(ctx)),
+          ...(ctx.priceFloorCents != null ? { must_cost_more_than: formatCad(ctx.priceFloorCents) } : {}),
           ...(ctx.basket
             ? {
                 basket_so_far: ctx.basket.titles,
@@ -267,6 +275,19 @@ export async function runAgent(db: DB, rewardId: number, deps: AgentDeps = {}): 
     provider: deps.provider ?? getProvider(settings),
     timeZone: user.timezone,
   };
+  if (row.goal.challengeId != null && row.goal.maxPriceCents != null && !row.goal.rewardItemId) {
+    // The previous milestone's limit becomes this one's floor, if anything on the wishlist sits above it.
+    const lower = (await db.select().from(goals).where(eq(goals.challengeId, row.goal.challengeId))).filter(
+      (g) => (g.targetKm ?? 0) < (row.goal.targetKm ?? 0) && g.maxPriceCents != null,
+    );
+    const floor = lower.length ? Math.max(...lower.map((g) => g.maxPriceCents!)) : undefined;
+    if (floor != null) {
+      const inBand = (await db.select().from(wishlistItems).where(eq(wishlistItems.active, true))).some(
+        (i) => i.expectedPriceCents > floor && i.expectedPriceCents <= row.goal.maxPriceCents!,
+      );
+      if (inBand) ctx.priceFloorCents = floor;
+    }
+  }
   if (row.goal.challengeId != null) {
     const [c] = await db.select().from(challenges).where(eq(challenges.id, row.goal.challengeId));
     const w = c?.basketCheckout ? challengeWindow(c, row.activity.startTime, user.timezone) : null;

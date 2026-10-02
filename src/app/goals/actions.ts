@@ -7,6 +7,7 @@ import { getDb } from "@/db";
 import { challenges, goals, rewardEvents } from "@/db/schema";
 import { requireAuth } from "@/lib/auth";
 import { TIERS } from "@/lib/tiers";
+import { parseDollarsToCents } from "@/lib/format";
 
 export type FormState = { error?: string; ok?: boolean };
 
@@ -76,11 +77,12 @@ const challengeSchema = z.object({
   startsOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "pick a start date"),
   lengthDays: z.coerce.number().int().min(1).max(60),
   repeats: z.boolean(),
+  basket: z.boolean(),
   milestones: z
     .array(
       z.object({
         km: z.coerce.number().positive().max(500),
-        tier: z.enum(TIERS),
+        maxPriceCents: z.number().int().positive().max(500_00).nullable(),
         itemId: z.coerce.number().int().positive().nullable(),
       }),
     )
@@ -88,17 +90,23 @@ const challengeSchema = z.object({
     .max(6),
 });
 
+function tierForPrice(cents: number | null): (typeof TIERS)[number] {
+  if (cents == null) return "medium";
+  return cents <= 15_00 ? "small" : cents <= 30_00 ? "medium" : "large";
+}
+
 /** A challenge plus one goal per milestone, e.g. 5 / 10 / 20 km in a week. */
 export async function createChallenge(_prev: FormState, form: FormData): Promise<FormState> {
   await requireAuth();
   const milestones = [0, 1, 2, 3, 4, 5]
-    .map((i) => ({ km: form.get(`km_${i}`), tier: form.get(`tier_${i}`), itemId: form.get(`item_${i}`) || null }))
+    .map((i) => ({ km: form.get(`km_${i}`), maxPriceCents: parseDollarsToCents(form.get(`max_${i}`)), itemId: form.get(`item_${i}`) || null }))
     .filter((m) => m.km != null && String(m.km).trim() !== "");
   const parsed = challengeSchema.safeParse({
     name: form.get("name"),
     startsOn: form.get("startsOn"),
     lengthDays: form.get("lengthDays"),
     repeats: form.get("repeats") === "on",
+    basket: form.get("basket") === "on",
     milestones,
   });
   if (!parsed.success) return { error: issues(parsed.error) };
@@ -107,7 +115,10 @@ export async function createChallenge(_prev: FormState, form: FormData): Promise
   if (new Set(kms).size !== kms.length) return { error: "milestones must be different distances" };
 
   const db = await getDb();
-  const [row] = await db.insert(challenges).values({ name: c.name, startsOn: c.startsOn, lengthDays: c.lengthDays, repeats: c.repeats }).returning();
+  const [row] = await db
+    .insert(challenges)
+    .values({ name: c.name, startsOn: c.startsOn, lengthDays: c.lengthDays, repeats: c.repeats, basketCheckout: c.basket })
+    .returning();
   await db.insert(goals).values(
     c.milestones
       .sort((a, b) => a.km - b.km)
@@ -115,7 +126,9 @@ export async function createChallenge(_prev: FormState, form: FormData): Promise
         name: `${c.name}: ${m.km} km`,
         type: "weekly_distance" as const,
         targetKm: m.km,
-        rewardTier: m.tier,
+        // The tier only matters without a price limit; derive it from the limit for display.
+        rewardTier: tierForPrice(m.maxPriceCents),
+        maxPriceCents: m.maxPriceCents,
         rewardItemId: m.itemId,
         challengeId: row.id,
       })),

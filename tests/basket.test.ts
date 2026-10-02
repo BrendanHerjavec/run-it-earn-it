@@ -175,3 +175,34 @@ describe("basket challenge", () => {
     expect(link.itemCents).toBe(2250 * 2 + 3750);
   });
 });
+
+describe("demo cleanup with baskets", () => {
+  it("deleting demo runs also removes a demo-only basket order, freeing the week", async () => {
+    const { deleteDemoData } = await import("@/lib/demo");
+    const { activity } = await storeActivity(db, { ...stravaRun({ distance: 6000, start_date: "2026-10-06T12:00:00Z" }), id: -99 }, "simulated");
+    const out = await processActivity(db, activity);
+    if (out.status !== "reward_created") throw new Error(out.status);
+    await runRewardAgent(db, out.rewardEventId, { provider: provider(), createMessage: scriptedClaude([[toolUse("choose_reward", { item_id: bag.Decaf, message: "5K" })]]).createMessage });
+    const orderId = (await createBasketOrder(db, 1, "2026-10-05"))!;
+    await runBasketOrder(db, orderId, { provider: provider(), sleep: async (ms) => void (clock += ms * 10 + 5000) });
+
+    expect(await deleteDemoData(db)).toEqual({ runs: 1, rewards: 1, orders: 1 });
+    expect(await db.select().from(orders)).toHaveLength(0);
+    expect(await db.select().from(spendLedger)).toHaveLength(0);
+  });
+});
+
+describe("fancier the further you go", () => {
+  it("a later milestone must beat the previous milestone's price limit", async () => {
+    const { activity } = await storeActivity(db, stravaRun({ distance: 21000, moving_time: 7000, start_date: "2026-10-06T12:00:00Z" }), "strava");
+    const out = await processActivity(db, activity);
+    if (out.status !== "reward_created") throw new Error(out.status);
+    const twenty = (await db.select().from(rewardEvents).where(eq(rewardEvents.goalId, milestone[20])))[0];
+    const claude = scriptedClaude([
+      [toolUse("choose_reward", { item_id: bag.Decaf, message: "cheap" })], // $22.50 ≤ $32 floor: rejected
+      [toolUse("choose_reward", { item_id: bag.Pressure, message: "20K: the fancy one." })], // $37.50: ok
+    ]);
+    const r = await runAgent(db, twenty.id, { provider: provider(), createMessage: claude.createMessage });
+    expect(r).toMatchObject({ ok: true, itemId: bag.Pressure });
+  });
+});

@@ -1,15 +1,15 @@
 "use client";
 
 import { useActionState, useState } from "react";
-import { TIERS } from "@/lib/tiers";
 import { createChallenge, type FormState } from "./actions";
 
 type Item = { id: number; title: string; priceCents: number };
 
+// Fancier the further you get: e.g. up to a $25, $32, then $40 bag.
 const DEFAULTS = [
-  { km: "5", tier: "small" },
-  { km: "10", tier: "medium" },
-  { km: "20", tier: "large" },
+  { km: "5", max: "25" },
+  { km: "10", max: "32" },
+  { km: "20", max: "40" },
 ];
 
 export function ChallengeForm({ items, today }: { items: Item[]; today: string }) {
@@ -36,6 +36,15 @@ export function ChallengeForm({ items, today }: { items: Item[]; today: string }
           <span className="text-sm">Repeat</span>
         </label>
       </div>
+      <label className="flex items-start gap-3">
+        <input type="checkbox" name="basket" defaultChecked className="mt-1 size-4 accent-[var(--volt)]" />
+        <span>
+          <span className="font-semibold">One order at the end of the week</span>
+          <span className="block text-sm text-muted">
+            Each milestone adds its reward to a basket; everything is bought together when the week ends (e.g. free shipping over $75).
+          </span>
+        </span>
+      </label>
 
       <div className="space-y-2">
         <p className="label">Milestones: each one unlocks its own reward</p>
@@ -49,19 +58,16 @@ export function ChallengeForm({ items, today }: { items: Item[]; today: string }
               </div>
             </label>
             <label className="sm:col-span-3">
-              <span className="sr-only">Reward tier</span>
-              <select name={`tier_${i}`} defaultValue={DEFAULTS[i]?.tier ?? "small"} className="input">
-                {TIERS.map((t) => (
-                  <option key={t} value={t}>
-                    {t} reward
-                  </option>
-                ))}
-              </select>
+              <span className="sr-only">Max price</span>
+              <div className="relative">
+                <span className="pointer-events-none absolute left-3 top-2 text-muted">up to $</span>
+                <input name={`max_${i}`} inputMode="decimal" defaultValue={DEFAULTS[i]?.max ?? ""} placeholder="40" className="input pl-20 tabular-nums" />
+              </div>
             </label>
             <label className="sm:col-span-7">
               <span className="sr-only">Reward item</span>
               <select name={`item_${i}`} defaultValue="" className="input">
-                <option value="">Claude picks within the tier</option>
+                <option value="">Claude picks (within the price limit)</option>
                 {items.map((it) => (
                   <option key={it.id} value={it.id}>
                     Always: {it.title} (${(it.priceCents / 100).toFixed(2)})

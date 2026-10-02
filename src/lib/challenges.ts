@@ -1,6 +1,6 @@
 import { and, asc, eq, gte, inArray, lt } from "drizzle-orm";
 import type { DB } from "@/db";
-import { activities, challenges, goals, rewardEvents, wishlistItems, type Challenge } from "@/db/schema";
+import { activities, challenges, goals, orders, rewardEvents, wishlistItems, type Challenge } from "@/db/schema";
 import { distanceBetweenM } from "./stats";
 import { addDays, daysBetween, localDateKey, localDateStart } from "./time";
 
@@ -34,8 +34,25 @@ export type ChallengeProgress = {
     unlocked: boolean;
     rewardEventId: number | null;
     rewardStatus: string | null;
+    maxPriceCents: number | null;
   }[];
+  /** Basket challenges: this window's picks and its order, if any. */
+  basket: { titles: string[]; subtotalCents: number; order: { id: number; status: string } | null } | null;
 };
+
+async function basketSummary(db: DB, challengeId: number, w: ChallengeWindow, timeZone: string) {
+  const { basketLines } = await import("./basket");
+  const [order] = await db
+    .select({ id: orders.id, status: orders.status })
+    .from(orders)
+    .where(and(eq(orders.challengeId, challengeId), eq(orders.windowStartKey, w.startKey)));
+  const lines = await basketLines(db, challengeId, w.startKey, timeZone, order?.id);
+  return {
+    titles: lines.map((l) => l.item.title),
+    subtotalCents: lines.reduce((s, l) => s + l.item.expectedPriceCents, 0),
+    order: order ?? null,
+  };
+}
 
 const LIVE = ["pending_agent", "awaiting_approval", "approved", "checking_out", "completed"] as const;
 
@@ -86,7 +103,9 @@ export async function challengeProgress(db: DB, now: Date, timeZone: string, onl
         unlocked: inWindow.has(goal.id),
         rewardEventId: inWindow.get(goal.id)?.id ?? null,
         rewardStatus: inWindow.get(goal.id)?.status ?? null,
+        maxPriceCents: goal.maxPriceCents,
       })),
+      basket: c.basketCheckout && w ? await basketSummary(db, c.id, w, timeZone) : null,
     });
   }
   return out;

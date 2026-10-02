@@ -1,6 +1,6 @@
 import { and, asc, eq, gte, inArray, isNull, lt, sql } from "drizzle-orm";
 import type { DB } from "@/db";
-import { activities, challenges, goals, orders, rewardEvents, spendLedger, wishlistItems, type Order } from "@/db/schema";
+import { activities, challenges, eventLog, goals, orders, rewardEvents, spendLedger, wishlistItems, type Order } from "@/db/schema";
 import { rewardPageUrl } from "./approval";
 import { challengeWindow, type ChallengeWindow } from "./challenges";
 import { config } from "./config";
@@ -319,3 +319,64 @@ export async function dueBaskets(db: DB, now: Date, timeZone: string): Promise<{
 
 export type { ChallengeWindow };
 export { rewardPageUrl };
+
+/** The runner fixed something in the browser during a basket checkout; let the agent continue. */
+export async function resumeOrder(db: DB, id: number, note: string, deps: OrderDeps = {}) {
+  const [o] = await db.select().from(orders).where(eq(orders.id, id));
+  if (!o || o.status !== "checking_out" || !o.providerRunId) return false;
+  const provider = deps.provider ?? providerByName(o.provider ?? "mock", await getEffectiveSettings(db));
+  if (!provider.respond) return false;
+  await provider.respond(o.providerRunId, note);
+  await logEvent(db, { kind: "order.resumed", orderId: id, message: note });
+  return true;
+}
+
+export type OrderView = {
+  id: number;
+  status: Order["status"];
+  challengeName: string;
+  windowStartKey: string;
+  autoApproveAt: string | null;
+  provider: string | null;
+  quotedTotalCents: number | null;
+  maxSpendCents: number | null;
+  totalChargedCents: number | null;
+  receipt: unknown;
+  failureReason: string | null;
+  checkout: CheckoutStatus | null;
+  lines: { rewardId: number; milestoneKm: number | null; message: string | null; title: string; priceCents: number; productUrl: string }[];
+  log: { id: number; at: string; kind: string; message: string }[];
+};
+
+export async function getOrderView(db: DB, id: number): Promise<OrderView | null> {
+  const [o] = await db.select().from(orders).where(eq(orders.id, id));
+  if (!o) return null;
+  const [c] = await db.select().from(challenges).where(eq(challenges.id, o.challengeId));
+  const user = await getUser(db);
+  const startKey = o.windowStartKey.split("#")[0];
+  const lines = await basketLines(db, o.challengeId, startKey, user.timezone, id);
+  const log = await db.select().from(eventLog).where(eq(eventLog.orderId, id)).orderBy(asc(eventLog.id));
+  return {
+    id: o.id,
+    status: o.status,
+    challengeName: c?.name ?? "Challenge",
+    windowStartKey: startKey,
+    autoApproveAt: o.autoApproveAt?.toISOString() ?? null,
+    provider: o.provider,
+    quotedTotalCents: o.quotedTotalCents,
+    maxSpendCents: o.maxSpendCents,
+    totalChargedCents: o.totalChargedCents,
+    receipt: o.receipt,
+    failureReason: o.failureReason,
+    checkout: (o.checkoutState as CheckoutStatus | null) ?? null,
+    lines: lines.map((l) => ({
+      rewardId: l.rewardId,
+      milestoneKm: l.milestoneKm,
+      message: l.message,
+      title: l.item.title,
+      priceCents: l.item.expectedPriceCents,
+      productUrl: l.item.productUrl,
+    })),
+    log: log.map((l) => ({ id: l.id, at: l.createdAt.toISOString(), kind: l.kind, message: l.message })),
+  };
+}

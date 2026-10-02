@@ -134,7 +134,7 @@ describe("demo data", () => {
     const { activity: real } = await storeActivity(db, stravaRun({ distance: 6000 }), "strava");
     await processActivity(db, fake);
     await processActivity(db, real);
-    expect(await deleteDemoData(db)).toEqual({ runs: 1, rewards: 1 });
+    expect(await deleteDemoData(db)).toEqual({ runs: 1, rewards: 1, orders: 0 });
     const { activities } = await import("@/db/schema");
     expect((await db.select().from(activities)).map((a) => a.source)).toEqual(["strava"]);
     expect(await db.select().from(rewardEvents)).toHaveLength(1);

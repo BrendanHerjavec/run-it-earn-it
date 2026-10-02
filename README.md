@@ -4,7 +4,7 @@ Finish a run that hits a goal → a Claude agent picks a reward from your wishli
 
 Single-user app. Next.js 16 (App Router) + TypeScript + Drizzle/Postgres, deployed on Vercel.
 
-> **Status:** Runs locally on your PC. Set up a **challenge** (e.g. Weekly 20K with 5 / 10 / 20 km milestones). Press **Sync runs**: new COROS runs are pulled in, and each milestone you cross unlocks a reward. Claude picks it, a 10 s countdown runs (Cancel), then the app opens the **store's own checkout link** in your browser with the item in the cart and your address filled in. You click Pay, then tell the app "I placed the order".
+> **Status:** Runs locally. A weekly **basket challenge** (e.g. Weekly 20K): each milestone you pass (5 / 10 / 20 km) unlocks a reward. Claude picks a bag of coffee, fancier the further you go (up to $25 / $32 / $40), into the week's basket. When the week ends (on your next **Sync runs**, or press **Check out now**), everything is bought as **one order** (one checkout, free shipping over the store's threshold) by the browser agent, or via the store's cart link.
 
 ## How a run becomes a reward
 
@@ -53,6 +53,18 @@ npm run strava:webhook -- create https://YOUR-PUBLIC-URL/api/strava/webhook
 ## Challenges
 
 **Goals → New challenge:** a name, start date, length (default 7 days), repeat weekly, and up to 6 distance milestones. Each milestone is either **fixed** to a wishlist item ("20 km → the vest") or **Claude picks** within a price tier. Every milestone crossed in the window unlocks its own reward, and one long run can unlock several. They're processed one after another. The budget caps apply across all of them.
+
+### Basket challenges (one order a week)
+
+Tick **One order at the end of the week** when creating a challenge. Then:
+
+- Each milestone's pick goes **into the basket** (status `in_basket`) instead of checking out.
+- **Price limits rise per milestone**, and each milestone must pick something pricier than the previous milestone's limit when the wishlist has one ("fancier the further you go").
+- A pick must fit the **per-order cap together with the rest of the basket**.
+- The first **Sync runs** after the window ends creates the week's order. **Check out now** on the challenge card does it immediately.
+- **The order runs like a reward:** a 10 s countdown with Cancel (which keeps the bags in the basket), then one checkout with all items, either a multi-item Shopify cart permalink `/cart/A:1,B:1,C:1` or a multi-item Amazon add-to-cart link.
+- **Money:** one ledger entry, a hard cap of quote + buffer, settled at the real total.
+- **One order per challenge window.** "Put the bags back in the basket" lets you retry a failed or not-bought order.
 
 ## Buying: cart links (default, terms-safe)
 

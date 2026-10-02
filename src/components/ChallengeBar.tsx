@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { ChallengeProgress } from "@/lib/challenges";
-import { formatKm } from "@/lib/format";
+import { formatCad, formatKm } from "@/lib/format";
+import { checkoutBasketNow } from "@/app/basket-actions";
 
 /** Running total with milestone markers that light up as they unlock. */
 export function ChallengeBar({ p, timeZone }: { p: ChallengeProgress; timeZone: string }) {
@@ -37,11 +38,12 @@ export function ChallengeBar({ p, timeZone }: { p: ChallengeProgress; timeZone: 
             <>
               <span
                 className={`block size-5 rounded-full border-2 ${m.unlocked ? "border-volt bg-volt" : "border-line bg-surface"}`}
-                title={m.itemTitle ?? `${m.tier} reward`}
+                title={m.itemTitle ?? (m.maxPriceCents ? `up to ${formatCad(m.maxPriceCents)}` : `${m.tier} reward`)}
               />
               <span className={`mt-1 block whitespace-nowrap text-xs font-semibold ${m.unlocked ? "text-volt" : "text-muted"}`}>
                 {m.km} km{m.unlocked ? " ✓" : ""}
               </span>
+              {m.maxPriceCents != null && <span className="block text-[11px] text-muted">≤ {formatCad(m.maxPriceCents)}</span>}
             </>
           );
           return (
@@ -52,7 +54,38 @@ export function ChallengeBar({ p, timeZone }: { p: ChallengeProgress; timeZone: 
         })}
       </div>
 
-      <p className="text-sm text-muted">
+      {p.basket && (
+        <div className="mt-6 rounded-xl border border-line bg-surface-2 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="eyebrow">This week&apos;s basket · one order</p>
+              <p className="mt-1 font-semibold">
+                {p.basket.titles.length ? p.basket.titles.join(" + ") : "Empty so far: hit a milestone to add a reward"}
+              </p>
+              {p.basket.titles.length > 0 && (
+                <p className="text-sm text-muted tabular-nums">
+                  {formatCad(p.basket.subtotalCents)} before tax
+                  {p.window ? ` · orders on your first Sync after ${fmt(new Date(p.window.end.getTime() - 1))}` : ""}
+                </p>
+              )}
+            </div>
+            {p.basket.order ? (
+              <Link href={`/orders/${p.basket.order.id}`} className="btn-primary">
+                Order: {p.basket.order.status.replaceAll("_", " ")} →
+              </Link>
+            ) : (
+              p.basket.titles.length > 0 && (
+                <form action={checkoutBasketNow}>
+                  <input type="hidden" name="challengeId" value={p.challenge.id} />
+                  <button className="btn">Check out now</button>
+                </form>
+              )
+            )}
+          </div>
+        </div>
+      )}
+
+      <p className="mt-4 text-sm text-muted">
         {next
           ? `${(next.km - km).toFixed(1)} km to the ${next.km} km reward${next.itemTitle ? `: ${next.itemTitle}` : ""}`
           : ms.length

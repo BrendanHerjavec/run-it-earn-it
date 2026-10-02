@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 type Outcome = { status: string; reason: string; rewardEventId?: number };
-type Result = { checked: number; newRuns: number; outcomes: Outcome[]; error?: string };
+type Result = { checked: number; newRuns: number; outcomes: Outcome[]; basketOrders?: number; error?: string };
 
 /**
  * The one button: pull new runs from COROS. If a run unlocks a reward, jump
@@ -25,7 +25,10 @@ export function SyncRuns({ connected }: { connected: boolean }) {
       if (r.error) return setMsg(r.error);
       const won = r.outcomes.find((o) => o.status === "reward_created" && o.rewardEventId);
       if (won) return router.push(`/rewards/${won.rewardEventId}?unlocked=1`);
-      if (r.newRuns === 0) setMsg("No new runs since your last sync.");
+      if (r.basketOrders) {
+        setMsg("Last week's basket is being ordered. Open it from the challenge card below.");
+        setTimeout(() => router.refresh(), 2500);
+      } else if (r.newRuns === 0) setMsg("No new runs since your last sync.");
       else setMsg(`${r.newRuns} new run(s) synced. ${r.outcomes.map((o) => o.reason).join(" · ")}`);
       router.refresh();
     } catch (err) {
