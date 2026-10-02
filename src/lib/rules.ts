@@ -8,7 +8,7 @@ import { startOfLocalWeek } from "./time";
 import { TIERS } from "./tiers";
 
 /** Statuses that mean "this goal already paid out (or is paying out)". Failed/skipped/rejected don't count. */
-const LIVE_STATUSES = ["pending_agent", "awaiting_approval", "approved", "checking_out", "completed"] as const;
+const LIVE_STATUSES = ["pending_agent", "awaiting_approval", "approved", "checking_out", "completed", "in_basket"] as const;
 
 export type SanityResult = { ok: true } | { ok: false; reason: string; flag: boolean };
 

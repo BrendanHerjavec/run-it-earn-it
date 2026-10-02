@@ -206,3 +206,19 @@ describe("fancier the further you go", () => {
     expect(r).toMatchObject({ ok: true, itemId: bag.Pressure });
   });
 });
+
+describe("milestones in the basket count as unlocked", () => {
+  it("a milestone already in this week's basket isn't unlocked again by a later-processed run", async () => {
+    await runAndPick(6, "2026-10-08T12:00:00Z", [{ item: bag.Decaf, msg: "5K" }]); // 5 km → basket
+    // A long run that started earlier in the week but synced later (re-crosses 5 km on its own).
+    const { activity } = await storeActivity(db, stravaRun({ distance: 12000, moving_time: 4000, start_date: "2026-10-06T12:00:00Z" }), "strava");
+    const out = await processActivity(db, activity);
+    if (out.status !== "reward_created") throw new Error(out.status);
+    const goalsHit = (await db.select().from(rewardEvents).where(eq(rewardEvents.activityId, activity.id))).map((e) => e.goalId);
+    expect(goalsHit).toEqual([milestone[10]]); // 10 km only, not 5 km again
+
+    const { challengeProgress } = await import("@/lib/challenges");
+    const [p] = await challengeProgress(db, new Date("2026-10-09T12:00:00Z"), TZ);
+    expect(p.milestones.find((m) => m.km === 5)?.unlocked).toBe(true);
+  });
+});

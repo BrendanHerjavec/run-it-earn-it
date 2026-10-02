@@ -54,7 +54,7 @@ async function basketSummary(db: DB, challengeId: number, w: ChallengeWindow, ti
   };
 }
 
-const LIVE = ["pending_agent", "awaiting_approval", "approved", "checking_out", "completed"] as const;
+const LIVE = ["pending_agent", "awaiting_approval", "approved", "checking_out", "completed", "in_basket"] as const;
 
 /** Progress of every active challenge at `now`, for the dashboard and the agent. */
 export async function challengeProgress(db: DB, now: Date, timeZone: string, onlyChallengeId?: number): Promise<ChallengeProgress[]> {
