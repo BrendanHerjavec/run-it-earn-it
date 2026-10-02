@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { parse as parseDotenv } from "dotenv";
 import { z } from "zod";
 
 /**
@@ -26,6 +29,8 @@ const schema = z.object({
   APP_BASE_URL: z.string().default("http://localhost:3000"),
   ANTHROPIC_API_KEY: z.string().default(""),
   ANTHROPIC_MODEL: z.string().default("claude-sonnet-5"),
+  /** Needed only for organization-level API keys that aren't scoped to a workspace. */
+  ANTHROPIC_WORKSPACE_ID: z.string().default(""),
   STRAVA_CLIENT_ID: z.string().default(""),
   STRAVA_CLIENT_SECRET: z.string().default(""),
   STRAVA_WEBHOOK_VERIFY_TOKEN: z.string().default(""),
@@ -60,8 +65,23 @@ export type AppConfig = z.infer<typeof schema>;
 
 let cached: AppConfig | null = null;
 
+/**
+ * This app runs on your own machine, so the project's .env.local wins over
+ * machine-wide variables (e.g. an old ANTHROPIC_API_KEY set in Windows).
+ * Next.js on its own does the opposite. Tests keep their own environment.
+ */
+function localOverrides(): Record<string, string> {
+  if (process.env.NODE_ENV === "test") return {};
+  try {
+    const parsed = parseDotenv(readFileSync(path.join(process.cwd(), ".env.local")));
+    return Object.fromEntries(Object.entries(parsed).filter(([, v]) => v !== ""));
+  } catch {
+    return {};
+  }
+}
+
 export function config(): AppConfig {
-  if (!cached) cached = schema.parse(process.env);
+  if (!cached) cached = schema.parse({ ...process.env, ...localOverrides() });
   return cached;
 }
 

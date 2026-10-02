@@ -3,6 +3,7 @@ import type { WishlistItem } from "@/db/schema";
 import type { CreateMessage } from "../agent";
 import { runBrowserCheckout } from "../browser/checkout-agent";
 import { getBrowser, type BrowserMcp } from "../browser/session";
+import { anthropicClient } from "../anthropic";
 import { config } from "../config";
 import type { Buyer, CheckoutProvider, CheckoutStatus, Quote } from "./types";
 
@@ -58,7 +59,7 @@ export class BrowserProvider implements CheckoutProvider {
     const createMessage =
       this.opts.createMessage ??
       (() => {
-        const client = new Anthropic({ apiKey: config().ANTHROPIC_API_KEY || undefined, timeout: 120_000 });
+        const client = anthropicClient();
         return (p: Anthropic.MessageCreateParamsNonStreaming) => client.messages.create(p);
       })();
 

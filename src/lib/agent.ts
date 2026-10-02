@@ -3,6 +3,7 @@ import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import type { DB } from "@/db";
 import { activities, goals, rewardEvents, wishlistItems, type Activity, type Goal, type RewardEvent, type WishlistItem } from "@/db/schema";
+import { anthropicClient } from "./anthropic";
 import { config } from "./config";
 import { logEvent } from "./events";
 import { formatCad, formatDuration, formatPace } from "./format";
@@ -209,9 +210,7 @@ async function runTool(ctx: Ctx, name: string, input: unknown): Promise<{ conten
 }
 
 function defaultCreateMessage(): CreateMessage {
-  const key = config().ANTHROPIC_API_KEY;
-  if (!key) throw new Error("ANTHROPIC_API_KEY is not set");
-  const client = new Anthropic({ apiKey: key, timeout: 120_000 });
+  const client = anthropicClient();
   return (params) => client.messages.create(params);
 }
 
