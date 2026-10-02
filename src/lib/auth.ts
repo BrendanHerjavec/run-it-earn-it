@@ -4,6 +4,14 @@
  * either one logs every session out. Uses Web Crypto so it works in proxy.ts.
  */
 export const SESSION_COOKIE = "rie_session";
+
+/**
+ * No APP_PASSWORD means no login: fine for this app because it only listens on
+ * 127.0.0.1 (see the dev/start scripts), so nothing else on the network can reach it.
+ */
+export function authDisabled(): boolean {
+  return !process.env.APP_PASSWORD;
+}
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 const enc = new TextEncoder();
@@ -34,7 +42,8 @@ export async function createSessionToken(now = Date.now()): Promise<{ token: str
 }
 
 export async function verifySessionToken(token: string | undefined, now = Date.now()): Promise<boolean> {
-  if (!token || !process.env.APP_PASSWORD) return false;
+  if (authDisabled()) return true;
+  if (!token) return false;
   const [expStr, sig] = token.split(".");
   const exp = Number(expStr);
   if (!Number.isFinite(exp) || exp < now || !sig) return false;

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { authDisabled } from "@/lib/auth";
 
 const NAV = [
   { href: "/", label: "Home" },
@@ -21,9 +22,11 @@ export function AppShell({ children, wide = false }: { children: React.ReactNode
                 {n.label}
               </Link>
             ))}
-            <form action="/api/auth/logout" method="post">
-              <button className="rounded-md px-3 py-1.5 text-muted hover:text-fg">Log out</button>
-            </form>
+            {!authDisabled() && (
+              <form action="/api/auth/logout" method="post">
+                <button className="rounded-md px-3 py-1.5 text-muted hover:text-fg">Log out</button>
+              </form>
+            )}
           </nav>
         </div>
       </header>

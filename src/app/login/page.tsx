@@ -1,9 +1,13 @@
+import { redirect } from "next/navigation";
+import { authDisabled } from "@/lib/auth";
+
 export default async function LoginPage({
   searchParams,
 }: {
   searchParams: Promise<{ error?: string; next?: string }>;
 }) {
   const { error, next } = await searchParams;
+  if (authDisabled()) redirect(next?.startsWith("/") ? next : "/");
   return (
     <main className="min-h-dvh grid place-items-center px-4">
       <form action="/api/auth/login" method="post" className="card w-full max-w-sm space-y-5">

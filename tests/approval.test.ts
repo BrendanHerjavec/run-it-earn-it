@@ -59,3 +59,17 @@ describe("kill switch", () => {
     expect(getProvider({ provider: "crossmint", purchasesEnabled: true }).name).toBe("crossmint");
   });
 });
+
+describe("no-password mode", () => {
+  it("with APP_PASSWORD empty, every request counts as signed in", async () => {
+    const { verifySessionToken } = await import("@/lib/auth");
+    const saved = process.env.APP_PASSWORD;
+    process.env.APP_PASSWORD = "";
+    try {
+      expect(await verifySessionToken(undefined)).toBe(true);
+    } finally {
+      process.env.APP_PASSWORD = saved;
+    }
+    expect(await verifySessionToken(undefined)).toBe(false);
+  });
+});
