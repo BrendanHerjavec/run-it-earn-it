@@ -1,4 +1,4 @@
-import { asc, desc } from "drizzle-orm";
+import { asc, desc, eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import { wishlistItems } from "@/db/schema";
 import { AppShell, PageTitle, TierPill } from "@/components/AppShell";
@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 
 export default async function WishlistPage() {
   const db = await getDb();
-  const items = await db.select().from(wishlistItems).orderBy(desc(wishlistItems.active), asc(wishlistItems.expectedPriceCents));
+  const items = await db.select().from(wishlistItems).where(eq(wishlistItems.source, "wishlist")).orderBy(desc(wishlistItems.active), asc(wishlistItems.expectedPriceCents));
 
   return (
     <AppShell>

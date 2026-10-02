@@ -32,7 +32,7 @@ describe("reward agent", () => {
       [toolUse("choose_reward", { item_id: byTitle("Protein bars"), message: "5.2 km! Refuel with chocolate." })],
     ]);
     const r = await runAgent(db, rewardId, { createMessage: claude.createMessage, provider });
-    expect(r).toMatchObject({ ok: true, itemId: byTitle("Protein bars"), quotedTotalCents: 28_24 });
+    expect(r).toMatchObject({ ok: true, itemId: byTitle("Protein bars"), quotedTotalCents: 24_99 });
 
     // Parallel tool calls come back in ONE user message, matched by id.
     const second = claude.requests[1].messages;
@@ -67,14 +67,14 @@ describe("reward agent", () => {
   });
 
   it("won't choose an item that fits the tier but not the remaining budget", async () => {
-    // $24.99 bars = $28.24 with tax. Tighten the per-order cap to $25.
+    // $24.99 bars; tighten the per-order cap to $24.
     const { settings } = await import("@/db/schema");
-    await db.insert(settings).values({ id: 1, maxOrderCents: 25_00 }).onConflictDoUpdate({ target: settings.id, set: { maxOrderCents: 25_00 } });
+    await db.insert(settings).values({ id: 1, maxOrderCents: 24_00 }).onConflictDoUpdate({ target: settings.id, set: { maxOrderCents: 24_00 } });
     const claude = scriptedClaude([[toolUse("choose_reward", { item_id: byTitle("Protein bars"), message: "Bars!" })], [text("Nothing else fits.")]]);
     const r = await runAgent(db, rewardId, { createMessage: claude.createMessage, provider });
     expect(r.ok).toBe(false);
     const errors = (await db.select().from(eventLog).where(eq(eventLog.rewardEventId, rewardId))).filter((l) => l.kind === "agent.tool_error");
-    expect(errors[0].message).toMatch(/over the \$25\.00 available/);
+    expect(errors[0].message).toMatch(/over the \$24\.00 available/);
   });
 
   it("fails cleanly without an API key", async () => {

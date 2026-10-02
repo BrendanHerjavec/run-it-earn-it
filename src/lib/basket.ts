@@ -33,30 +33,40 @@ function windowBounds(c: { startsOn: string; lengthDays: number }, startKey: str
   return { start: localDateStart(startKey, timeZone), end: localDateStart(addDays(startKey, c.lengthDays), timeZone) };
 }
 
-/** The picks waiting in a challenge window's basket (or already attached to its order). */
+/**
+ * The picks waiting in a challenge window's basket (or already attached to its
+ * order). With a free-shipping minimum, picks from earlier windows that never
+ * reached it roll over into this one.
+ */
 export async function basketLines(db: DB, challengeId: number, startKey: string, timeZone: string, orderId?: number): Promise<BasketLine[]> {
   const [c] = await db.select().from(challenges).where(eq(challenges.id, challengeId));
   if (!c) return [];
   const { start, end } = windowBounds(c, startKey, timeZone);
+  const when =
+    orderId != null
+      ? eq(rewardEvents.orderId, orderId)
+      : and(
+          eq(rewardEvents.status, "in_basket"),
+          isNull(rewardEvents.orderId),
+          c.freeShippingCents == null ? gte(activities.startTime, start) : undefined,
+          lt(activities.startTime, end),
+        );
   const rows = await db
     .select({ id: rewardEvents.id, km: goals.targetKm, message: rewardEvents.agentMessage, item: wishlistItems })
     .from(rewardEvents)
     .innerJoin(goals, eq(rewardEvents.goalId, goals.id))
     .innerJoin(activities, eq(rewardEvents.activityId, activities.id))
     .innerJoin(wishlistItems, eq(rewardEvents.chosenItemId, wishlistItems.id))
-    .where(
-      and(
-        eq(goals.challengeId, challengeId),
-        gte(activities.startTime, start),
-        lt(activities.startTime, end),
-        orderId != null ? eq(rewardEvents.orderId, orderId) : and(eq(rewardEvents.status, "in_basket"), isNull(rewardEvents.orderId)),
-      ),
-    )
-    .orderBy(asc(goals.targetKm));
+    .where(and(eq(goals.challengeId, challengeId), when))
+    .orderBy(asc(activities.startTime), asc(goals.targetKm));
   return rows.map((r) => ({ rewardId: r.id, milestoneKm: r.km, message: r.message, item: r.item }));
 }
 
 export const basketTotalCents = (lines: BasketLine[]) => lines.reduce((s, l) => s + l.item.expectedPriceCents, 0);
+
+/** What's still needed for free shipping (0 when there's no minimum or it's reached). */
+export const freeShippingShortCents = (c: { freeShippingCents: number | null }, lines: BasketLine[]) =>
+  c.freeShippingCents == null ? 0 : Math.max(0, c.freeShippingCents - basketTotalCents(lines));
 
 /** Group identical picks into checkout lines (two milestones → same bag → qty 2). */
 function toCheckoutLines(lines: BasketLine[]): CheckoutLine[] {
@@ -91,7 +101,7 @@ export async function createBasketOrder(db: DB, challengeId: number, startKey: s
   await logEvent(db, {
     kind: "order.created",
     orderId: order.id,
-    message: `Basket order: ${lines.map((l) => l.item.title).join(" + ")} (${formatCad(basketTotalCents(lines))} before tax)`,
+    message: `Basket order: ${lines.map((l) => l.item.title).join(" + ")} (${formatCad(basketTotalCents(lines))})`,
   });
   await notify(
     db,
@@ -299,7 +309,8 @@ export async function reopenBasket(db: DB, id: number) {
 
 /**
  * Baskets whose window has ended and that still hold picks: these get ordered
- * on the next Sync. Returns [challengeId, windowStartKey] pairs.
+ * on the next Sync. A basket under its free-shipping minimum waits (its picks
+ * roll into the next window). Returns [challengeId, windowStartKey] pairs.
  */
 export async function dueBaskets(db: DB, now: Date, timeZone: string): Promise<{ challengeId: number; startKey: string }[]> {
   const list = await db.select().from(challenges).where(and(eq(challenges.active, true), eq(challenges.basketCheckout, true)));
@@ -307,11 +318,14 @@ export async function dueBaskets(db: DB, now: Date, timeZone: string): Promise<{
   for (const c of list) {
     const current = challengeWindow(c, now, timeZone);
     // Look back over recent windows (the current one isn't finished yet).
-    const lastIndex = current ? current.index - 1 : Math.floor((now.getTime() - localDateStart(c.startsOn, timeZone).getTime()) / (c.lengthDays * 86_400_000));
-    for (let i = Math.max(0, lastIndex - 3); i <= lastIndex; i++) {
-      if (!c.repeats && i > 0) break;
+    const ended = current ? current.index - 1 : Math.floor((now.getTime() - localDateStart(c.startsOn, timeZone).getTime()) / (c.lengthDays * 86_400_000));
+    const lastIndex = c.repeats ? ended : Math.min(ended, 0);
+    // Rolling baskets: the latest finished window already holds every earlier pick.
+    for (let i = c.freeShippingCents != null ? lastIndex : Math.max(0, lastIndex - 3); i <= lastIndex; i++) {
+      if (i < 0) continue;
       const startKey = addDays(c.startsOn, i * c.lengthDays);
-      if ((await basketLines(db, c.id, startKey, timeZone)).length) due.push({ challengeId: c.id, startKey });
+      const lines = await basketLines(db, c.id, startKey, timeZone);
+      if (lines.length && freeShippingShortCents(c, lines) === 0) due.push({ challengeId: c.id, startKey });
     }
   }
   return due;

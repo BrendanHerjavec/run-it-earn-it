@@ -43,6 +43,13 @@
       "when": 1790912257047,
       "tag": "0005_basket_orders",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790963310264,
+      "tag": "0006_shop_challenges",
+      "breakpoints": true
     }
   ]
 }

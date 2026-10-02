@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import type { DB } from "@/db";
 import { activities, challenges, goals, rewardEvents, wishlistItems, type Activity, type Goal, type RewardEvent, type WishlistItem } from "@/db/schema";
@@ -12,18 +12,21 @@ import { getEffectiveSettings, getUser } from "./settings";
 import { budgetStatus, runStreakDays, weeklyDistanceM, type BudgetStatus } from "./stats";
 import { challengeProgress, challengeWindow } from "./challenges";
 import { basketLines, basketTotalCents } from "./basket";
+import { shopCatalog, upsertShopItem, type ShopProduct } from "./shop";
 import { TIER_MAX_CENTS, tierAllows, type Tier } from "./tiers";
 
 export const SYSTEM_PROMPT = `You are the runner's hype coach inside "Run It, Earn It". When they finish a run that hits a goal, you pick ONE reward from their wishlist and write them a short message about why they earned it.
 
 How to work:
-1. Call get_run_summary, get_budget_status and list_wishlist to see the run, the money available, and the options.
+1. Call get_run_summary, get_budget_status and list_wishlist (or browse_store, when you have it) to see the run, the money available, and the options.
 2. Pick the item that best fits this particular effort: a bigger or tougher run earns something better; a quest deserves something fun. Use the item notes. If the runner fixed this milestone's reward, only that item is eligible: pick it and focus on the message. Milestones further into a challenge allow pricier items; make the bigger effort feel like a bigger treat.
-3. Call choose_reward exactly once with the item's id and your message.
+3. Call choose_reward exactly once with your pick and your message.
+
+Shop challenges (you have browse_store instead of list_wishlist): you're shopping a real store's live shelf, e.g. funky filter coffee. Each milestone should feel like a step up into something wilder: unusual processing, rare varieties, famous producers, tasting notes that sound like dessert. Pick by the product's handle. If get_budget_status shows a free-shipping minimum and this pick gets the basket over it, say so in the message.
 
 Hard rules (the server enforces these; breaking them just wastes a turn):
-- Only choose an item returned by list_wishlist, by its id. Never invent products, prices or links.
-- The item must be marked eligible: within the reward tier for this goal and within the remaining budget including tax.
+- Only choose an item returned by list_wishlist (by id) or browse_store (by handle). Never invent products, prices or links.
+- The item must be marked eligible: within this goal's price limit and the remaining budget, and (in a shop) not something already picked.
 - If choose_reward returns an error, read it and pick a different eligible item.
 - If nothing is eligible, don't call choose_reward; say so in one sentence.
 
@@ -35,6 +38,8 @@ export type AgentDeps = {
   createMessage?: CreateMessage;
   provider?: CheckoutProvider;
   now?: () => Date;
+  /** Fetch for a shop challenge's store collection (tests pass a fake). */
+  fetch?: typeof fetch;
 };
 
 export type AgentResult =
@@ -50,7 +55,7 @@ const TOOLS: Anthropic.Tool[] = [
   {
     name: "list_wishlist",
     description:
-      "Active wishlist items with id, title, price, tier, notes, estimated total including tax, and whether each is eligible for this reward. Optionally filter by tier.",
+      "Active wishlist items with id, title, price, tier, notes, estimated total, and whether each is eligible for this reward. Optionally filter by tier.",
     input_schema: {
       type: "object",
       properties: { tier: { type: "string", enum: ["small", "medium", "large"], description: "Only list items of this tier" } },
@@ -59,7 +64,8 @@ const TOOLS: Anthropic.Tool[] = [
   },
   {
     name: "get_budget_status",
-    description: "Remaining reward budget in CAD: per-order cap, what's left today and this week, and the most the next reward may cost.",
+    description:
+      "Remaining reward budget in CAD: per-order cap, what's left today and this week, the most the next reward may cost, and (basket challenges) what's in the basket and how far it is from free shipping.",
     input_schema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
@@ -78,6 +84,32 @@ const TOOLS: Anthropic.Tool[] = [
   },
 ];
 
+/** Shop challenges swap list_wishlist for the store's live shelf, and choose by handle. */
+const SHOP_TOOLS: Anthropic.Tool[] = [
+  TOOLS[0],
+  {
+    name: "browse_store",
+    description:
+      "This challenge's store collection, live: in-stock products with handle, title, price, tasting notes and process, and whether each is eligible for this milestone. Eligible ones come first, priciest first.",
+    input_schema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  TOOLS[2],
+  {
+    name: "choose_reward",
+    description:
+      "Record your choice. The server re-checks the product's price and stock against the limits and returns an error if it is not allowed. Call once.",
+    input_schema: {
+      type: "object",
+      properties: {
+        product: { type: "string", description: "handle from browse_store" },
+        message: { type: "string", description: "1–2 playful sentences for the runner, under 240 characters" },
+      },
+      required: ["product", "message"],
+      additionalProperties: false,
+    },
+  },
+];
+
 type Ctx = {
   db: DB;
   event: RewardEvent;
@@ -91,8 +123,10 @@ type Ctx = {
    * the previous milestone's limit, when the wishlist has such an item.
    */
   priceFloorCents?: number;
-  /** Basket challenges: picks already waiting for this window's order (before tax). */
-  basket?: { titles: string[]; cents: number };
+  /** Basket challenges: picks already waiting for this window's order. */
+  basket?: { titles: string[]; cents: number; freeShippingCents: number | null };
+  /** Shop challenges: the store's live shelf, and product links already picked (no repeats). */
+  shop?: { products: ShopProduct[]; pickedUrls: Set<string> };
   chosen?: { itemId: number; message: string; quotedTotalCents: number };
 };
 
@@ -103,14 +137,14 @@ function priceLimitCents(ctx: Ctx) {
 
 /** Money available for this pick: with a basket, what's left of the order cap after the earlier picks. */
 function availableCents(ctx: Ctx) {
-  const basketWithTax = ctx.basket ? Math.round(ctx.basket.cents * 1.13) : 0;
-  return Math.max(0, ctx.budget.availableForNextOrderCents - basketWithTax);
+  return Math.max(0, ctx.budget.availableForNextOrderCents - (ctx.basket?.cents ?? 0));
 }
 
 const chooseSchema = z.object({ item_id: z.number().int(), message: z.string().trim().min(1).max(280) });
+const chooseShopSchema = z.object({ product: z.string().trim().min(1), message: z.string().trim().min(1).max(280) });
 const listSchema = z.object({ tier: z.enum(["small", "medium", "large"]).optional() });
 
-/** The most this reward may cost, including tax: remaining budget, capped by the goal's tier band. */
+/** The most this reward may cost: remaining budget, capped by the goal's price limit. */
 function ceilingCents(ctx: Ctx) {
   return Math.min(availableCents(ctx), priceLimitCents(ctx));
 }
@@ -141,6 +175,21 @@ async function eligibility(ctx: Ctx, item: WishlistItem) {
         : `estimated total ${formatCad(quote.totalCents)} is over the ${formatCad(availableCents(ctx))} available`,
     );
   return { eligible: reasons.length === 0, reasons, quote };
+}
+
+/** Why a store product can't be this milestone's pick (empty = eligible). Shop prices are what you pay. */
+function shopReasons(ctx: Ctx, p: ShopProduct): string[] {
+  const reasons: string[] = [];
+  const limit = priceLimitCents(ctx);
+  if (p.priceCents > limit) reasons.push(`price is above this milestone's ${formatCad(limit)} limit`);
+  if (ctx.priceFloorCents != null && p.priceCents <= ctx.priceFloorCents)
+    reasons.push(`this milestone should be fancier than the last one: pick something over ${formatCad(ctx.priceFloorCents)}`);
+  if (p.priceCents > availableCents(ctx))
+    reasons.push(
+      ctx.basket ? `with the basket so far, the order would go over the limit (${formatCad(availableCents(ctx))} left)` : `over the ${formatCad(availableCents(ctx))} available`,
+    );
+  if (ctx.shop?.pickedUrls.has(p.url)) reasons.push("already picked (in the basket or had before): try something new");
+  return reasons;
 }
 
 async function runTool(ctx: Ctx, name: string, input: unknown): Promise<{ content: string; isError?: boolean }> {
@@ -201,14 +250,21 @@ async function runTool(ctx: Ctx, name: string, input: unknown): Promise<{ conten
           ...(ctx.basket
             ? {
                 basket_so_far: ctx.basket.titles,
-                note: "This challenge orders everything in one basket at the end of the week; the whole basket must fit the per-order cap.",
+                basket_subtotal: formatCad(ctx.basket.cents),
+                ...(ctx.basket.freeShippingCents != null
+                  ? {
+                      free_shipping_at: formatCad(ctx.basket.freeShippingCents),
+                      still_needed_for_free_shipping: formatCad(Math.max(0, ctx.basket.freeShippingCents - ctx.basket.cents)),
+                      note: "Everything is ordered as one basket once it reaches free shipping (it rolls over week to week until then); the whole basket must fit the per-order cap.",
+                    }
+                  : { note: "This challenge orders everything in one basket at the end of the week; the whole basket must fit the per-order cap." }),
               }
             : {}),
         }),
       };
     case "list_wishlist": {
       const { tier } = listSchema.parse(input ?? {});
-      const conds = [eq(wishlistItems.active, true)];
+      const conds = [eq(wishlistItems.active, true), eq(wishlistItems.source, "wishlist")];
       if (tier) conds.push(eq(wishlistItems.tier, tier));
       const items = await db.select().from(wishlistItems).where(and(...conds));
       const rows = await Promise.all(
@@ -218,7 +274,7 @@ async function runTool(ctx: Ctx, name: string, input: unknown): Promise<{ conten
             id: item.id,
             title: item.title,
             price: formatCad(item.expectedPriceCents),
-            estimated_total_incl_tax: formatCad(e.quote.totalCents),
+            estimated_total: formatCad(e.quote.totalCents),
             tier: item.tier,
             notes: item.notes,
             eligible: e.eligible,
@@ -228,8 +284,41 @@ async function runTool(ctx: Ctx, name: string, input: unknown): Promise<{ conten
       );
       return { content: JSON.stringify(rows) };
     }
+    case "browse_store": {
+      if (!ctx.shop) return { content: "This challenge has no store; use list_wishlist.", isError: true };
+      const rows = ctx.shop.products
+        .map((p) => ({ p, why: shopReasons(ctx, p) }))
+        .sort((a, b) => a.why.length - b.why.length || b.p.priceCents - a.p.priceCents)
+        .map(({ p, why }) => ({
+          handle: p.handle,
+          title: p.title,
+          price: formatCad(p.priceCents),
+          notes: p.notes,
+          eligible: why.length === 0,
+          ...(why.length ? { why_not: why.join("; ") } : {}),
+        }));
+      // The shelf can be 100+ products: send every eligible one and a few that are just out of reach.
+      return {
+        content: JSON.stringify({
+          eligible: rows.filter((r) => r.eligible),
+          some_ineligible: rows.filter((r) => !r.eligible).slice(0, 8),
+          in_stock_total: rows.length,
+        }),
+      };
+    }
     case "choose_reward": {
       if (ctx.chosen) return { content: "You already chose a reward for this run.", isError: true };
+      if (ctx.shop) {
+        const parsed = chooseShopSchema.safeParse(input);
+        if (!parsed.success) return { content: `Invalid input: ${parsed.error.issues.map((i) => i.message).join("; ")}`, isError: true };
+        const p = ctx.shop.products.find((x) => x.handle === parsed.data.product);
+        if (!p) return { content: `No in-stock product with handle "${parsed.data.product}". Use a handle from browse_store.`, isError: true };
+        const why = shopReasons(ctx, p);
+        if (why.length) return { content: `Not allowed: ${why.join("; ")}. Pick a different eligible product.`, isError: true };
+        const item = await upsertShopItem(db, p);
+        ctx.chosen = { itemId: item.id, message: parsed.data.message, quotedTotalCents: p.priceCents };
+        return { content: `Recorded: ${p.title} (${formatCad(p.priceCents)}).` };
+      }
       const parsed = chooseSchema.safeParse(input);
       if (!parsed.success) return { content: `Invalid input: ${parsed.error.issues.map((i) => i.message).join("; ")}`, isError: true };
       const [item] = await db.select().from(wishlistItems).where(eq(wishlistItems.id, parsed.data.item_id));
@@ -237,11 +326,23 @@ async function runTool(ctx: Ctx, name: string, input: unknown): Promise<{ conten
       const e = await eligibility(ctx, item);
       if (!e.eligible) return { content: `Not allowed: ${e.reasons.join("; ")}. Pick a different eligible item.`, isError: true };
       ctx.chosen = { itemId: item.id, message: parsed.data.message, quotedTotalCents: e.quote.totalCents };
-      return { content: `Recorded: ${item.title} (${formatCad(e.quote.totalCents)} incl. tax). The runner will be asked to approve.` };
+      return { content: `Recorded: ${item.title} (${formatCad(e.quote.totalCents)}). The runner will be asked to approve.` };
     }
     default:
       return { content: `Unknown tool ${name}`, isError: true };
   }
+}
+
+/** Store products already picked for another reward (waiting, bought or on the way), so Claude doesn't repeat them. */
+async function pickedShopUrls(db: DB, rewardId: number) {
+  const rows = await db
+    .select({ id: rewardEvents.id, url: wishlistItems.productUrl })
+    .from(rewardEvents)
+    .innerJoin(wishlistItems, eq(rewardEvents.chosenItemId, wishlistItems.id))
+    .where(
+      and(eq(wishlistItems.source, "shop"), inArray(rewardEvents.status, ["awaiting_approval", "approved", "checking_out", "completed", "in_basket"])),
+    );
+  return new Set(rows.filter((r) => r.id !== rewardId).map((r) => r.url));
 }
 
 function defaultCreateMessage(): CreateMessage {
@@ -275,26 +376,33 @@ export async function runAgent(db: DB, rewardId: number, deps: AgentDeps = {}): 
     provider: deps.provider ?? getProvider(settings),
     timeZone: user.timezone,
   };
-  if (row.goal.challengeId != null && row.goal.maxPriceCents != null && !row.goal.rewardItemId) {
-    // The previous milestone's limit becomes this one's floor, if anything on the wishlist sits above it.
-    const lower = (await db.select().from(goals).where(eq(goals.challengeId, row.goal.challengeId))).filter(
+  const [challenge] = row.goal.challengeId != null ? await db.select().from(challenges).where(eq(challenges.id, row.goal.challengeId)) : [];
+  if (challenge?.shopUrl && !row.goal.rewardItemId) {
+    try {
+      ctx.shop = { products: await shopCatalog(challenge.shopUrl, challenge.shopTag, deps.fetch), pickedUrls: await pickedShopUrls(db, rewardId) };
+    } catch (err) {
+      return { ok: false, reason: `Couldn't load the store: ${err instanceof Error ? err.message : String(err)}` };
+    }
+  }
+  if (challenge && row.goal.maxPriceCents != null && !row.goal.rewardItemId) {
+    // The previous milestone's limit becomes this one's floor, if anything on offer sits above it.
+    const lower = (await db.select().from(goals).where(eq(goals.challengeId, challenge.id))).filter(
       (g) => (g.targetKm ?? 0) < (row.goal.targetKm ?? 0) && g.maxPriceCents != null,
     );
     const floor = lower.length ? Math.max(...lower.map((g) => g.maxPriceCents!)) : undefined;
     if (floor != null) {
-      const inBand = (await db.select().from(wishlistItems).where(eq(wishlistItems.active, true))).some(
-        (i) => i.expectedPriceCents > floor && i.expectedPriceCents <= row.goal.maxPriceCents!,
-      );
-      if (inBand) ctx.priceFloorCents = floor;
+      const prices = ctx.shop
+        ? ctx.shop.products.map((p) => p.priceCents)
+        : (await db.select().from(wishlistItems).where(and(eq(wishlistItems.active, true), eq(wishlistItems.source, "wishlist")))).map(
+            (i) => i.expectedPriceCents,
+          );
+      if (prices.some((c) => c > floor && c <= row.goal.maxPriceCents!)) ctx.priceFloorCents = floor;
     }
   }
-  if (row.goal.challengeId != null) {
-    const [c] = await db.select().from(challenges).where(eq(challenges.id, row.goal.challengeId));
-    const w = c?.basketCheckout ? challengeWindow(c, row.activity.startTime, user.timezone) : null;
-    if (c && w) {
-      const lines = (await basketLines(db, c.id, w.startKey, user.timezone)).filter((l) => l.rewardId !== rewardId);
-      ctx.basket = { titles: lines.map((l) => l.item.title), cents: basketTotalCents(lines) };
-    }
+  const w = challenge?.basketCheckout ? challengeWindow(challenge, row.activity.startTime, user.timezone) : null;
+  if (challenge && w) {
+    const lines = (await basketLines(db, challenge.id, w.startKey, user.timezone)).filter((l) => l.rewardId !== rewardId);
+    ctx.basket = { titles: lines.map((l) => l.item.title), cents: basketTotalCents(lines), freeShippingCents: challenge.freeShippingCents };
   }
 
   const model = config().ANTHROPIC_MODEL;
@@ -321,7 +429,7 @@ export async function runAgent(db: DB, rewardId: number, deps: AgentDeps = {}): 
         model,
         max_tokens: 16_000,
         system: SYSTEM_PROMPT,
-        tools: TOOLS,
+        tools: ctx.shop ? SHOP_TOOLS : TOOLS,
         thinking: { type: "adaptive", display: "summarized" },
         output_config: { effort: "medium" },
         messages,

@@ -98,6 +98,15 @@ export const challenges = pgTable("challenges", {
   repeats: boolean("repeats").notNull().default(false),
   /** Milestone rewards collect in a basket and are bought as ONE order when the window ends. */
   basketCheckout: boolean("basket_checkout").notNull().default(false),
+  /**
+   * Shop challenges: Claude picks from a live Shopify collection instead of the
+   * wishlist, e.g. https://eightouncecoffee.ca/collections/funky
+   */
+  shopUrl: text("shop_url"),
+  /** Only products matching every comma-separated tag substring, e.g. "meth_Filter, whole bean". */
+  shopTag: text("shop_tag").notNull().default(""),
+  /** Basket is only ordered once it reaches this subtotal; until then it rolls into the next window. */
+  freeShippingCents: integer("free_shipping_cents"),
   active: boolean("active").notNull().default(true),
   ...timestamps,
 });
@@ -129,6 +138,8 @@ export const wishlistItems = pgTable("wishlist_items", {
   tier: tierEnum("tier").notNull(),
   notes: text("notes").notNull().default(""),
   active: boolean("active").notNull().default(true),
+  /** "wishlist" = added by you; "shop" = picked by Claude in a shop challenge (hidden from the wishlist). */
+  source: text("source").$type<"wishlist" | "shop">().notNull().default("wishlist"),
   ...timestamps,
 });
 

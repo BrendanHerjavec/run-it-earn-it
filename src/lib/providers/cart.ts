@@ -14,7 +14,6 @@ import { linesLabel, linesTotalCents, type Buyer, type CheckoutLine, type Checko
  *  - Anything else: the product page itself.
  */
 
-const HST = 0.13;
 
 type ShopifyVariant = { id: number; title: string; available: boolean; price: number; options?: string[]; public_title?: string | null };
 type ShopifyProduct = { title: string; handle: string; variants: ShopifyVariant[] };
@@ -169,15 +168,14 @@ export class CartLinkProvider implements CheckoutProvider {
   async quote(lines: CheckoutLine[], buyer: Buyer): Promise<Quote> {
     const link = await buildCartLink(lines, buyer, this.opts.fetch);
     const itemCents = link.itemCents ?? linesTotalCents(lines);
-    const taxCents = Math.round(itemCents * HST);
     return {
       itemCents,
-      taxCents,
+      taxCents: 0,
       shippingCents: 0,
-      totalCents: itemCents + taxCents,
+      totalCents: itemCents,
       currency: "CAD",
       exact: false,
-      note: link.itemCents != null ? "Live store price + 13% HST estimate; shipping shown at checkout" : "Expected price + 13% HST estimate",
+      note: link.itemCents != null ? "Live store price; shipping shown at checkout" : "Expected price",
     };
   }
 

@@ -5,16 +5,17 @@ import { createChallenge, type FormState } from "./actions";
 
 type Item = { id: number; title: string; priceCents: number };
 
-// Fancier the further you get: e.g. up to a $25, $32, then $40 bag.
+// Fancier the further you get: each milestone must beat the last one's limit.
 const DEFAULTS = [
-  { km: "5", max: "25" },
-  { km: "10", max: "32" },
-  { km: "20", max: "40" },
+  { km: "5", max: "30" },
+  { km: "10", max: "40" },
+  { km: "20", max: "55" },
 ];
 
 export function ChallengeForm({ items, today }: { items: Item[]; today: string }) {
   const [state, action, pending] = useActionState<FormState, FormData>(createChallenge, {});
   const [rows, setRows] = useState(DEFAULTS.length);
+  const [shop, setShop] = useState(true);
 
   return (
     <form action={action} className="space-y-5">
@@ -41,10 +42,41 @@ export function ChallengeForm({ items, today }: { items: Item[]; today: string }
         <span>
           <span className="font-semibold">One order at the end of the week</span>
           <span className="block text-sm text-muted">
-            Each milestone adds its reward to a basket; everything is bought together when the week ends (e.g. free shipping over $75).
+            Each milestone adds its reward to a basket; everything is bought together when the week ends.
           </span>
         </span>
       </label>
+      <div className="space-y-3">
+        <label className="flex items-start gap-3">
+          <input type="checkbox" checked={shop} onChange={(e) => setShop(e.target.checked)} className="mt-1 size-4 accent-[var(--volt)]" />
+          <span>
+            <span className="font-semibold">Claude shops a store instead of the wishlist</span>
+            <span className="block text-sm text-muted">
+              Picks from the store&apos;s live, in-stock shelf, fancier at each milestone, and never the same thing twice.
+            </span>
+          </span>
+        </label>
+        {shop && (
+          <div className="grid gap-3 sm:grid-cols-12">
+            <label className="sm:col-span-6">
+              <span className="label">Store collection</span>
+              <input name="shopUrl" type="url" required defaultValue="https://eightouncecoffee.ca/collections/funky" className="input mt-1" />
+            </label>
+            <label className="sm:col-span-6">
+              <span className="label">Only products tagged</span>
+              <input name="shopTag" defaultValue="meth_Filter, whole bean" placeholder="e.g. meth_Filter" className="input mt-1" />
+            </label>
+          </div>
+        )}
+        <label className="flex flex-wrap items-center gap-3">
+          <span className="text-sm">Free shipping over</span>
+          <span className="relative w-28">
+            <span className="pointer-events-none absolute left-3 top-2 text-muted">$</span>
+            <input name="freeShipping" inputMode="decimal" defaultValue="75" placeholder="none" className="input pl-7 tabular-nums" />
+          </span>
+          <span className="text-sm text-muted">Under it, the basket waits and rolls into next week. Leave empty to always order.</span>
+        </label>
+      </div>
 
       <div className="space-y-2">
         <p className="label">Milestones: each one unlocks its own reward</p>
@@ -67,7 +99,7 @@ export function ChallengeForm({ items, today }: { items: Item[]; today: string }
             <label className="sm:col-span-7">
               <span className="sr-only">Reward item</span>
               <select name={`item_${i}`} defaultValue="" className="input">
-                <option value="">Claude picks (within the price limit)</option>
+                <option value="">{shop ? "Claude picks from the store (within the price limit)" : "Claude picks (within the price limit)"}</option>
                 {items.map((it) => (
                   <option key={it.id} value={it.id}>
                     Always: {it.title} (${(it.priceCents / 100).toFixed(2)})

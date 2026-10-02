@@ -1,10 +1,11 @@
-import { eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import type { DB } from "@/db";
-import { activities, rewardEvents, users, wishlistItems, type Activity } from "@/db/schema";
+import { activities, challenges, rewardEvents, users, wishlistItems, type Activity } from "@/db/schema";
 import { config } from "./config";
 import { logEvent } from "./events";
 import { evaluateGoals, sanityCheck, selectRewards } from "./rules";
 import { getEffectiveSettings, getUser } from "./settings";
+import { shopCatalog } from "./shop";
 import { budgetStatus } from "./stats";
 import { fetchActivity as fetchFromStrava, getAccessToken, type StravaActivity, type StravaWebhookEvent } from "./strava";
 import { TIER_MAX_CENTS, TIERS } from "./tiers";
@@ -24,6 +25,8 @@ export type PipelineDeps = {
   onRewardCreated?: (db: DB, rewardEventId: number) => Promise<void>;
   /** "Sync runs": rewards buy automatically after a countdown instead of waiting for Approve. */
   autoApprove?: boolean;
+  /** Fetch for shop challenges' store collection (tests pass a fake). */
+  fetch?: typeof fetch;
 };
 
 async function defaultFetch(db: DB, stravaId: number): Promise<StravaActivity> {
@@ -104,8 +107,6 @@ export async function storeActivity(db: DB, a: StravaActivity, source: "strava" 
   return { activity: row, created: false };
 }
 
-/** Rough tax-inclusive price used for budget checks before Claude picks (13% HST). */
-const withTax = (cents: number) => Math.round(cents * 1.13);
 
 /**
  * Rules engine + guardrails for one stored activity. Creates at most one
@@ -144,7 +145,18 @@ export async function processActivity(db: DB, activity: Activity, deps: Pipeline
   // must have at least one item it could still afford after the earlier ones.
   const settings = await getEffectiveSettings(db);
   const budget = await budgetStatus(db, settings, new Date(), user.timezone);
-  const items = await db.select().from(wishlistItems).where(eq(wishlistItems.active, true));
+  const items = await db.select().from(wishlistItems).where(and(eq(wishlistItems.active, true), eq(wishlistItems.source, "wishlist")));
+  // Shop challenges pick from their store's live shelf instead of the wishlist.
+  const shopPrices = new Map<number, number[]>();
+  const challengeIds = [...new Set(selected.map((h) => h.goal.challengeId).filter((id): id is number => id != null))];
+  if (challengeIds.length) {
+    for (const c of await db.select().from(challenges).where(inArray(challenges.id, challengeIds))) {
+      if (!c.shopUrl) continue;
+      // If the store can't be reached, let the agent try (and report it) rather than skipping the reward.
+      const shelf = await shopCatalog(c.shopUrl, c.shopTag, deps.fetch).catch(() => null);
+      if (shelf) shopPrices.set(c.id, shelf.map((p) => p.priceCents));
+    }
+  }
   // Each reward must fit the per-order cap on its own; together they draw down the daily and weekly budgets.
   let dailyLeft = budget.remainingDailyCents;
   let weeklyLeft = budget.remainingWeeklyCents;
@@ -160,7 +172,10 @@ export async function processActivity(db: DB, activity: Activity, deps: Pipeline
       : maxPrice != null
         ? items.filter((i) => i.expectedPriceCents <= maxPrice)
         : items.filter((i) => TIERS.indexOf(i.tier) <= tierIdx && i.expectedPriceCents <= TIER_MAX_CENTS[hit.goal.rewardTier]);
-    const cheapest = Math.min(...candidates.map((i) => withTax(i.expectedPriceCents)));
+    const shelf = hit.goal.challengeId != null && !hit.goal.rewardItemId ? shopPrices.get(hit.goal.challengeId) : undefined;
+    const cheapest = shelf
+      ? Math.min(...shelf.filter((c) => maxPrice == null || c <= maxPrice))
+      : Math.min(...candidates.map((i) => i.expectedPriceCents));
     const available = availableNow();
     const fits = Number.isFinite(cheapest) && cheapest <= available;
     const failureReason = fits
@@ -169,7 +184,7 @@ export async function processActivity(db: DB, activity: Activity, deps: Pipeline
         ? candidates.length
           ? `This milestone's reward costs about ${(cheapest / 100).toFixed(2)} CAD; only ${(available / 100).toFixed(2)} CAD left`
           : "This milestone's reward item is no longer on the wishlist"
-        : `No wishlist item fits: ${(available / 100).toFixed(2)} CAD available for a ${hit.goal.rewardTier} reward`;
+        : `${shelf ? "Nothing in the store" : "No wishlist item"} fits: ${(available / 100).toFixed(2)} CAD available for a ${hit.goal.rewardTier} reward`;
 
     const [row] = await db
       .insert(rewardEvents)

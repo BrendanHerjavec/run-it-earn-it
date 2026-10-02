@@ -4,7 +4,7 @@ Finish a run that hits a goal → a Claude agent picks a reward from your wishli
 
 Single-user app. Next.js 16 (App Router) + TypeScript + Drizzle/Postgres, deployed on Vercel.
 
-> **Status:** Runs locally. A weekly **basket challenge** (e.g. Weekly 20K): each milestone you pass (5 / 10 / 20 km) unlocks a reward. Claude picks a bag of coffee, fancier the further you go (up to $25 / $32 / $40), into the week's basket. When the week ends (on your next **Sync runs**, or press **Check out now**), everything is bought as **one order** (one checkout, free shipping over the store's threshold) by the browser agent, or via the store's cart link.
+> **Status:** Runs locally. A weekly **basket challenge** (e.g. Weekly 20K): each milestone you pass (5 / 10 / 20 km) unlocks a reward. Claude shops Eight Ounce Coffee's live **Funky** filter coffees and picks a bag, fancier the further you go (up to $30 / $40 / $55), into the week's basket. When the week ends (on your next **Sync runs**, or press **Check out now**), everything is bought as **one order** via the store's cart link, but only once the basket clears **free shipping ($75)**. Until then it rolls into next week.
 
 ## How a run becomes a reward
 
@@ -16,7 +16,7 @@ Single-user app. Next.js 16 (App Router) + TypeScript + Drizzle/Postgres, deploy
    - **Weekly distance:** earned by the run that crosses the target, once per local week (Monday start, in your timezone).
    - **Quest:** earned the first time the route passes within the radius. We check the distance to each *segment* of the polyline, not just the recorded points.
 5. At most one reward per activity (highest tier wins). If no wishlist item fits the remaining budget and tier, the reward is `skipped_budget`. Otherwise it's `pending_agent`.
-6. **Claude** (`claude-sonnet-5`, adaptive thinking) calls `get_run_summary`, `get_budget_status` and `list_wishlist`, then `choose_reward(item_id, message)`. The server re-checks the item, tier and price including tax, and returns an error if the choice isn't allowed, so Claude picks again. The full transcript, including summarized thinking, is saved for replay.
+6. **Claude** (`claude-sonnet-5`, adaptive thinking) calls `get_run_summary`, `get_budget_status` and `list_wishlist`, then `choose_reward(item_id, message)`. The server re-checks the item, tier and price, and returns an error if the choice isn't allowed, so Claude picks again. The full transcript, including summarized thinking, is saved for replay.
 7. **ntfy** pushes "Claude picked X, Approve?" with **Approve** / **Skip** buttons. The links are signed, bound to the reward, single-use and expire in 2 hours.
 8. **Approve** re-checks every cap under a lock, reserves a hard cap (quote + 10%, never above what's left) in the spend ledger, and starts the checkout. The dashboard shows live progress; the ledger settles to the actual charge, or is released if the checkout fails.
 
@@ -65,6 +65,16 @@ Tick **One order at the end of the week** when creating a challenge. Then:
 - **The order runs like a reward:** a 10 s countdown with Cancel (which keeps the bags in the basket), then one checkout with all items, either a multi-item Shopify cart permalink `/cart/A:1,B:1,C:1` or a multi-item Amazon add-to-cart link.
 - **Money:** one ledger entry, a hard cap of quote + buffer, settled at the real total.
 - **One order per challenge window.** "Put the bags back in the basket" lets you retry a failed or not-bought order.
+- **Free shipping minimum** (default $75): a finished week whose basket is under it isn't ordered. The bags roll into the next week's basket until the total clears it. Claude sees how far the basket is from free shipping. **Check out now** still orders immediately if you want to pay shipping.
+- **Tax isn't tracked**: quotes and caps use the item price (coffee is zero-rated in Canada anyway).
+
+### Shop challenges (Claude browses a real store)
+
+Tick **Claude shops a store instead of the wishlist** and give a Shopify collection link plus tags, e.g. `https://eightouncecoffee.ca/collections/funky` and `meth_Filter, whole bean`. Then:
+
+- Claude gets `browse_store` in place of `list_wishlist`. The shelf is read live from the store's public `/collections/{handle}/products.json`, the same JSON its storefront uses, so no scraper or key is needed. It includes in-stock products matching every tag, each with tasting notes, process, variety, origin and bag size. It's cached for 10 minutes.
+- Claude chooses by product handle. The server re-checks the price limit, the "fancier than the last milestone" floor, the budget, and that the bag hasn't been picked before (in the basket or bought).
+- A pick is saved as a hidden `source = "shop"` wishlist row, so rewards, baskets and cart links work unchanged. It never shows up on the Wishlist page.
 
 ## Buying: cart links (default, terms-safe)
 

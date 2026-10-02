@@ -1,8 +1,5 @@
 import { linesTotalCents, type Buyer, type CheckoutLine, type CheckoutProvider, type CheckoutStatus, type Quote } from "./types";
 
-/** Ontario HST. The mock quotes like a Canadian store with free shipping. */
-const HST = 0.13;
-
 const STEPS = [
   "Opening the product page",
   "Checking price and availability",
@@ -27,15 +24,14 @@ export class MockProvider implements CheckoutProvider {
 
   async quote(lines: CheckoutLine[]): Promise<Quote> {
     const itemCents = linesTotalCents(lines);
-    const taxCents = Math.round(itemCents * HST);
     return {
       itemCents,
-      taxCents,
+      taxCents: 0,
       shippingCents: 0,
-      totalCents: itemCents + taxCents,
+      totalCents: itemCents,
       currency: "CAD",
       exact: true,
-      note: "Mock quote: 13% HST, free shipping",
+      note: "Mock quote: free shipping",
     };
   }
 
@@ -56,7 +52,7 @@ export class MockProvider implements CheckoutProvider {
     const reached = Math.min(STEPS.length, Math.floor(elapsed / stepMs) + 1);
     const steps = STEPS.slice(0, reached).map((label, i) => ({ label, at: new Date(start + i * stepMs).toISOString() }));
 
-    const totalCents = itemCents + Math.round(itemCents * HST);
+    const totalCents = itemCents;
     if (totalCents > cap && reached >= 6) {
       return {
         state: "failed",
@@ -79,7 +75,7 @@ export class MockProvider implements CheckoutProvider {
         merchant: "Mock Running Co. (simulated)",
         orderId,
         subtotalCents: itemCents,
-        taxCents: totalCents - itemCents,
+        taxCents: 0,
         shippingCents: 0,
         totalCents,
         currency: "CAD",

@@ -11,6 +11,9 @@ export function ChallengeBar({ p, timeZone }: { p: ChallengeProgress; timeZone: 
   const pct = Math.min(100, (km / maxKm) * 100);
   const fmt = (d: Date) => d.toLocaleDateString("en-CA", { timeZone, month: "short", day: "numeric" });
   const next = ms.find((m) => !m.unlocked && km < m.km);
+  const freeShip = p.challenge.freeShippingCents;
+  const short = p.basket && freeShip != null ? Math.max(0, freeShip - p.basket.subtotalCents) : 0;
+  const ordersWhen = p.window ? `orders on your first Sync after ${fmt(new Date(p.window.end.getTime() - 1))}` : "";
 
   return (
     <div className="card">
@@ -64,8 +67,19 @@ export function ChallengeBar({ p, timeZone }: { p: ChallengeProgress; timeZone: 
               </p>
               {p.basket.titles.length > 0 && (
                 <p className="text-sm text-muted tabular-nums">
-                  {formatCad(p.basket.subtotalCents)} before tax
-                  {p.window ? ` · orders on your first Sync after ${fmt(new Date(p.window.end.getTime() - 1))}` : ""}
+                  {formatCad(p.basket.subtotalCents)}
+                  {short > 0
+                    ? ` · ${formatCad(short)} more for free shipping (${formatCad(freeShip!)}); until then it rolls into next week`
+                    : `${freeShip != null ? " · free shipping ✓" : ""}${ordersWhen ? ` · ${ordersWhen}` : ""}`}
+                </p>
+              )}
+              {p.challenge.shopUrl && (
+                <p className="text-sm text-muted">
+                  Claude shops{" "}
+                  <a href={p.challenge.shopUrl} target="_blank" rel="noreferrer" className="underline">
+                    {new URL(p.challenge.shopUrl).hostname.replace(/^www./, "")}
+                  </a>
+                  {p.challenge.shopTag ? ` (${p.challenge.shopTag})` : ""}
                 </p>
               )}
             </div>

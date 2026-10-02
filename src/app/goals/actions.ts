@@ -6,6 +6,7 @@ import { z } from "zod";
 import { getDb } from "@/db";
 import { challenges, goals, rewardEvents } from "@/db/schema";
 import { requireAuth } from "@/lib/auth";
+import { parseCollectionUrl } from "@/lib/shop";
 import { TIERS } from "@/lib/tiers";
 import { parseDollarsToCents } from "@/lib/format";
 
@@ -78,6 +79,12 @@ const challengeSchema = z.object({
   lengthDays: z.coerce.number().int().min(1).max(60),
   repeats: z.boolean(),
   basket: z.boolean(),
+  shopUrl: z
+    .string()
+    .trim()
+    .refine((u) => !u || parseCollectionUrl(u) != null, "the store link must be a collection, like https://eightouncecoffee.ca/collections/funky"),
+  shopTag: z.string().trim().max(100),
+  freeShippingCents: z.number().int().positive().max(1000_00).nullable(),
   milestones: z
     .array(
       z.object({
@@ -107,6 +114,9 @@ export async function createChallenge(_prev: FormState, form: FormData): Promise
     lengthDays: form.get("lengthDays"),
     repeats: form.get("repeats") === "on",
     basket: form.get("basket") === "on",
+    shopUrl: form.get("shopUrl") ?? "",
+    shopTag: form.get("shopTag") ?? "",
+    freeShippingCents: parseDollarsToCents(form.get("freeShipping")),
     milestones,
   });
   if (!parsed.success) return { error: issues(parsed.error) };
@@ -117,7 +127,16 @@ export async function createChallenge(_prev: FormState, form: FormData): Promise
   const db = await getDb();
   const [row] = await db
     .insert(challenges)
-    .values({ name: c.name, startsOn: c.startsOn, lengthDays: c.lengthDays, repeats: c.repeats, basketCheckout: c.basket })
+    .values({
+      name: c.name,
+      startsOn: c.startsOn,
+      lengthDays: c.lengthDays,
+      repeats: c.repeats,
+      basketCheckout: c.basket,
+      shopUrl: c.shopUrl || null,
+      shopTag: c.shopUrl ? c.shopTag : "",
+      freeShippingCents: c.basket ? c.freeShippingCents : null,
+    })
     .returning();
   await db.insert(goals).values(
     c.milestones

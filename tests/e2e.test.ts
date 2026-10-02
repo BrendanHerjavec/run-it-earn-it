@@ -83,7 +83,7 @@ describe("end to end with the mock provider", () => {
     // The push notification carries the choice and a signed Approve link.
     expect(sent).toHaveLength(1);
     expect(sent[0].topic).toBe("test-topic");
-    expect(sent[0].message).toContain("Protein bars ($28.24 incl. tax)");
+    expect(sent[0].message).toContain("Protein bars ($24.99)");
     const { url, token } = tokenFrom(sent[0]);
     expect(url).toMatch(new RegExp(`^https://runny.example/api/rewards/${id}/approve\\?token=`));
     expect(sent[0].actions!.map((a) => a.label)).toEqual(["Approve", "Skip", "Open"]);
@@ -93,7 +93,7 @@ describe("end to end with the mock provider", () => {
     expect(await approveReward(db, id, "notification", deps)).toEqual({ ok: true });
     [ev] = await db.select().from(rewardEvents).where(eq(rewardEvents.id, id));
     expect(ev.status).toBe("checking_out");
-    expect(ev.maxSpendCents).toBe(Math.ceil(28_24 * 1.1)); // quote + 10%, under the $40 cap
+    expect(ev.maxSpendCents).toBe(Math.ceil(24_99 * 1.1)); // quote + 10%, under the $40 cap
     let [ledger] = await db.select().from(spendLedger);
     expect(ledger).toMatchObject({ kind: "reserved", amountCents: ev.maxSpendCents });
 
@@ -105,14 +105,14 @@ describe("end to end with the mock provider", () => {
     const final = await runCheckoutLoop(db, id, deps, { intervalMs: 2000, budgetMs: 60_000 });
     expect(final).toBe("completed");
     [ev] = await db.select().from(rewardEvents).where(eq(rewardEvents.id, id));
-    expect(ev.totalChargedCents).toBe(28_24);
-    expect(ev.receipt).toMatchObject({ totalCents: 28_24, currency: "CAD", simulated: true });
+    expect(ev.totalChargedCents).toBe(24_99);
+    expect(ev.receipt).toMatchObject({ totalCents: 24_99, currency: "CAD", simulated: true });
     [ledger] = await db.select().from(spendLedger);
-    expect(ledger).toMatchObject({ kind: "settled", amountCents: 28_24 });
+    expect(ledger).toMatchObject({ kind: "settled", amountCents: 24_99 });
 
     // Budget reflects the real charge, not the reservation.
     const b = await budgetStatus(db, await getEffectiveSettings(db), new Date(), "America/Toronto");
-    expect(b.spentTodayCents).toBe(28_24);
+    expect(b.spentTodayCents).toBe(24_99);
 
     expect(sent.map((m) => m.title)).toEqual(["🏃 5.2 km done. Reward unlocked!", "🛒 Checkout started", "✅ Order placed"]);
   });

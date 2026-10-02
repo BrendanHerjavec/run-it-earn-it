@@ -57,7 +57,7 @@ export function OrderLive({ initial, timeZone }: { initial: OrderView; timeZone:
           {view.lines.length} reward{view.lines.length === 1 ? "" : "s"}, one order
         </h1>
         <p className="text-xl text-muted">
-          {formatCad(subtotal)} before tax{view.quotedTotalCents ? ` · about ${formatCad(view.quotedTotalCents)} with tax` : ""}
+          {formatCad(subtotal)}
           {view.maxSpendCents ? ` · hard cap ${formatCad(view.maxSpendCents)}` : ""}
         </p>
       </header>

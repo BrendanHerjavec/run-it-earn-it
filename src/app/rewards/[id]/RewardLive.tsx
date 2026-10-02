@@ -206,7 +206,7 @@ export function RewardLive({
                   <div>
                     <p className="text-xl font-bold">{view.item.title}</p>
                     <p className="text-sm text-muted">
-                      {formatCad(view.item.priceCents)} · {view.quotedTotalCents ? `${formatCad(view.quotedTotalCents)} incl. tax` : ""} · {view.item.tier}
+                      {formatCad(view.item.priceCents)} · {view.item.tier}
                     </p>
                   </div>
                   {view.maxSpendCents != null && <p className="text-sm text-muted">hard cap {formatCad(view.maxSpendCents)}</p>}

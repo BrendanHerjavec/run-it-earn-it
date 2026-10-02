@@ -1,4 +1,4 @@
-import { asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import { challenges, goals, wishlistItems } from "@/db/schema";
 import { ChallengeBar } from "@/components/ChallengeBar";
@@ -24,7 +24,7 @@ export default async function GoalsPage() {
   const now = new Date();
   const [allGoals, items, allChallenges] = await Promise.all([
     db.select().from(goals).orderBy(desc(goals.active), desc(goals.createdAt)),
-    db.select().from(wishlistItems).where(eq(wishlistItems.active, true)).orderBy(asc(wishlistItems.expectedPriceCents)),
+    db.select().from(wishlistItems).where(and(eq(wishlistItems.active, true), eq(wishlistItems.source, "wishlist"))).orderBy(asc(wishlistItems.expectedPriceCents)),
     db.select().from(challenges).orderBy(desc(challenges.active), desc(challenges.createdAt)),
   ]);
   const progress = new Map(

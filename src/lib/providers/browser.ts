@@ -17,7 +17,6 @@ type Run = {
 const g = globalThis as unknown as { __runnyBrowserRuns?: Map<string, Run> };
 const runs: Map<string, Run> = (g.__runnyBrowserRuns ??= new Map());
 
-const HST = 0.13;
 
 export type BrowserProviderOptions = {
   dryRun: boolean;
@@ -35,18 +34,17 @@ export class BrowserProvider implements CheckoutProvider {
   readonly name = "browser" as const;
   constructor(private readonly opts: BrowserProviderOptions) {}
 
-  /** A browser can't know tax and shipping until checkout; estimate with 13% HST. */
+  /** A browser can't know shipping until checkout; tax is not tracked. */
   async quote(lines: CheckoutLine[]): Promise<Quote> {
     const itemCents = linesTotalCents(lines);
-    const taxCents = Math.round(itemCents * HST);
     return {
       itemCents,
-      taxCents,
+      taxCents: 0,
       shippingCents: 0,
-      totalCents: itemCents + taxCents,
+      totalCents: itemCents,
       currency: "CAD",
       exact: false,
-      note: "Estimate: expected price + 13% HST; the agent reads the real total at checkout",
+      note: "Estimate: expected price; the agent reads the real total at checkout",
     };
   }
 

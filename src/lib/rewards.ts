@@ -129,7 +129,7 @@ async function afterChoice(db: DB, id: number, deps: RewardDeps) {
       db,
       {
         title: `🏃 ${formatKm(row.activity.distanceM)} done. Reward unlocked!`,
-        message: `Claude picked: ${row.item.title} (${formatCad(quoted)} incl. tax)
+        message: `Claude picked: ${row.item.title} (${formatCad(quoted)})
 
 "${row.event.agentMessage}"`,
         tags: ["tada"],
@@ -158,7 +158,7 @@ async function afterChoice(db: DB, id: number, deps: RewardDeps) {
     db,
     {
       title: `🏃 ${formatKm(row.activity.distanceM)} done. Reward unlocked!`,
-      message: `Claude picked: ${row.item.title} (${formatCad(quoted)} incl. tax)\n\n"${row.event.agentMessage}"\n\nApprove?`,
+      message: `Claude picked: ${row.item.title} (${formatCad(quoted)})\n\n"${row.event.agentMessage}"\n\nApprove?`,
       priority: 4,
       tags: ["tada"],
       click: urls.page,

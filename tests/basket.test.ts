@@ -96,9 +96,9 @@ describe("basket challenge", () => {
   });
 
   it("the whole basket must fit the order cap", async () => {
-    Object.assign(process.env, { MAX_ORDER_CAD: "60", MAX_DAILY_CAD: "120", MAX_WEEKLY_CAD: "120" });
+    Object.assign(process.env, { MAX_ORDER_CAD: "55", MAX_DAILY_CAD: "120", MAX_WEEKLY_CAD: "120" });
     resetConfigCache();
-    await runAndPick(6, "2026-10-06T12:00:00Z", [{ item: bag.Decaf, msg: "5K" }]); // $25.43 with tax in the basket
+    await runAndPick(6, "2026-10-06T12:00:00Z", [{ item: bag.Decaf, msg: "5K" }]); // $22.50 in the basket
     const { activity } = await storeActivity(db, stravaRun({ distance: 15000, moving_time: 5000, start_date: "2026-10-07T12:00:00Z" }), "strava");
     const out = await processActivity(db, activity); // 10 and 20 km together
     if (out.status !== "reward_created") throw new Error(out.status);
@@ -107,7 +107,7 @@ describe("basket challenge", () => {
       provider: provider(),
       createMessage: scriptedClaude([[toolUse("choose_reward", { item_id: bag.Pressure, message: "x" })], []]).createMessage,
     });
-    expect(r.ok).toBe(false); // $25.43 + $42.38 > $60
+    expect(r.ok).toBe(false); // $22.50 + $37.50 > $55
   });
 
   it("one combined order for the week: 3 bags, one checkout, one ledger entry", async () => {
@@ -127,7 +127,7 @@ describe("basket challenge", () => {
     const [o] = await db.select().from(orders).where(eq(orders.id, orderId));
     const subtotal = 22_50 + 29_50 + 37_50;
     expect(o.status).toBe("completed");
-    expect(o.totalChargedCents).toBe(subtotal + Math.round(subtotal * 0.13)); // $101.14
+    expect(o.totalChargedCents).toBe(subtotal); // $89.50
     const ledger = await db.select().from(spendLedger);
     expect(ledger).toHaveLength(1);
     expect(ledger[0]).toMatchObject({ orderId, kind: "settled", amountCents: o.totalChargedCents });
