@@ -1,5 +1,11 @@
 import type { WishlistItem } from "@/db/schema";
 
+/** One product in an order. A reward is one line; a basket order is several. */
+export type CheckoutLine = { item: WishlistItem; qty: number };
+
+export const linesTotalCents = (lines: CheckoutLine[]) => lines.reduce((s, l) => s + l.item.expectedPriceCents * l.qty, 0);
+export const linesLabel = (lines: CheckoutLine[]) => lines.map((l) => (l.qty > 1 ? `${l.qty} × ${l.item.title}` : l.item.title)).join(" + ");
+
 export type ProviderName = "mock" | "cart" | "browser" | "crossmint" | "rye";
 
 export type Buyer = {
@@ -53,9 +59,9 @@ export const TERMINAL: CheckoutStatus["state"][] = ["completed", "failed", "canc
 export interface CheckoutProvider {
   name: ProviderName;
   /** Price including tax and shipping when the provider can know it. */
-  quote(item: WishlistItem, buyer: Buyer): Promise<Quote>;
+  quote(lines: CheckoutLine[], buyer: Buyer): Promise<Quote>;
   /** Begin a checkout that must never charge more than maxSpendCents. */
-  start(item: WishlistItem, buyer: Buyer, maxSpendCents: number): Promise<{ runId: string; liveViewUrl?: string }>;
+  start(lines: CheckoutLine[], buyer: Buyer, maxSpendCents: number): Promise<{ runId: string; liveViewUrl?: string }>;
   status(runId: string): Promise<CheckoutStatus>;
   /** Answer a provider question (size, verification code, payment authorization). */
   respond?(runId: string, input: unknown): Promise<void>;

@@ -2,7 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import type { DB } from "@/db";
-import { activities, goals, rewardEvents, wishlistItems, type Activity, type Goal, type RewardEvent, type WishlistItem } from "@/db/schema";
+import { activities, challenges, goals, rewardEvents, wishlistItems, type Activity, type Goal, type RewardEvent, type WishlistItem } from "@/db/schema";
 import { anthropicClient } from "./anthropic";
 import { config } from "./config";
 import { logEvent } from "./events";
@@ -10,14 +10,15 @@ import { formatCad, formatDuration, formatPace } from "./format";
 import { buyerFromUser, getProvider, type CheckoutProvider } from "./providers";
 import { getEffectiveSettings, getUser } from "./settings";
 import { budgetStatus, runStreakDays, weeklyDistanceM, type BudgetStatus } from "./stats";
-import { challengeProgress } from "./challenges";
+import { challengeProgress, challengeWindow } from "./challenges";
+import { basketLines, basketTotalCents } from "./basket";
 import { TIER_MAX_CENTS, tierAllows, type Tier } from "./tiers";
 
 export const SYSTEM_PROMPT = `You are the runner's hype coach inside "Run It, Earn It". When they finish a run that hits a goal, you pick ONE reward from their wishlist and write them a short message about why they earned it.
 
 How to work:
 1. Call get_run_summary, get_budget_status and list_wishlist to see the run, the money available, and the options.
-2. Pick the item that best fits this particular effort: a bigger or tougher run earns something better; a quest deserves something fun. Use the item notes. If the runner fixed this milestone's reward, only that item is eligible: pick it and focus on the message.
+2. Pick the item that best fits this particular effort: a bigger or tougher run earns something better; a quest deserves something fun. Use the item notes. If the runner fixed this milestone's reward, only that item is eligible: pick it and focus on the message. Milestones further into a challenge allow pricier items; make the bigger effort feel like a bigger treat.
 3. Call choose_reward exactly once with the item's id and your message.
 
 Hard rules (the server enforces these; breaking them just wastes a turn):
@@ -85,33 +86,53 @@ type Ctx = {
   budget: BudgetStatus;
   provider: CheckoutProvider;
   timeZone: string;
+  /** Basket challenges: picks already waiting for this window's order (before tax). */
+  basket?: { titles: string[]; cents: number };
   chosen?: { itemId: number; message: string; quotedTotalCents: number };
 };
+
+/** Price limit for this reward: the milestone's own limit if set, else the tier band. */
+function priceLimitCents(ctx: Ctx) {
+  return ctx.goal.maxPriceCents ?? TIER_MAX_CENTS[ctx.goal.rewardTier as Tier];
+}
+
+/** Money available for this pick: with a basket, what's left of the order cap after the earlier picks. */
+function availableCents(ctx: Ctx) {
+  const basketWithTax = ctx.basket ? Math.round(ctx.basket.cents * 1.13) : 0;
+  return Math.max(0, ctx.budget.availableForNextOrderCents - basketWithTax);
+}
 
 const chooseSchema = z.object({ item_id: z.number().int(), message: z.string().trim().min(1).max(280) });
 const listSchema = z.object({ tier: z.enum(["small", "medium", "large"]).optional() });
 
 /** The most this reward may cost, including tax: remaining budget, capped by the goal's tier band. */
 function ceilingCents(ctx: Ctx) {
-  return Math.min(ctx.budget.availableForNextOrderCents, TIER_MAX_CENTS[ctx.goal.rewardTier as Tier]);
+  return Math.min(availableCents(ctx), priceLimitCents(ctx));
 }
 
 async function eligibility(ctx: Ctx, item: WishlistItem) {
   const user = await getUser(ctx.db);
-  const quote = await ctx.provider.quote(item, buyerFromUser(user));
+  const quote = await ctx.provider.quote([{ item, qty: 1 }], buyerFromUser(user));
   const reasons: string[] = [];
   const pinned = ctx.goal.rewardItemId;
   if (!item.active) reasons.push("inactive");
   if (pinned != null) {
     // The runner fixed this milestone's reward: only that item, tier limits don't apply.
     if (item.id !== pinned) reasons.push("this milestone's reward is fixed to a different item");
+  } else if (ctx.goal.maxPriceCents != null) {
+    // Milestone price limit, e.g. "up to a $40 bag" for the 20 km reward.
+    if (item.expectedPriceCents > ctx.goal.maxPriceCents) reasons.push(`price is above this milestone's ${formatCad(ctx.goal.maxPriceCents)} limit`);
   } else {
     if (!tierAllows(ctx.goal.rewardTier as Tier, item.tier as Tier)) reasons.push(`tier ${item.tier} is above this goal's ${ctx.goal.rewardTier} tier`);
     if (item.expectedPriceCents > TIER_MAX_CENTS[ctx.goal.rewardTier as Tier])
       reasons.push(`price is above the ${ctx.goal.rewardTier} tier limit of ${formatCad(TIER_MAX_CENTS[ctx.goal.rewardTier as Tier])}`);
   }
-  if (quote.totalCents > ctx.budget.availableForNextOrderCents)
-    reasons.push(`estimated total ${formatCad(quote.totalCents)} is over the ${formatCad(ctx.budget.availableForNextOrderCents)} available`);
+  if (quote.totalCents > availableCents(ctx))
+    reasons.push(
+      ctx.basket
+        ? `with the basket so far, the order would go over the limit (${formatCad(availableCents(ctx))} left)`
+        : `estimated total ${formatCad(quote.totalCents)} is over the ${formatCad(availableCents(ctx))} available`,
+    );
   return { eligible: reasons.length === 0, reasons, quote };
 }
 
@@ -168,7 +189,13 @@ async function runTool(ctx: Ctx, name: string, input: unknown): Promise<{ conten
           left_this_week: formatCad(budget.remainingWeeklyCents),
           max_for_this_reward_incl_tax: formatCad(ceilingCents(ctx)),
           reward_tier: goal.rewardTier,
-          tier_price_limit: formatCad(TIER_MAX_CENTS[goal.rewardTier as Tier]),
+          price_limit_for_this_reward: formatCad(priceLimitCents(ctx)),
+          ...(ctx.basket
+            ? {
+                basket_so_far: ctx.basket.titles,
+                note: "This challenge orders everything in one basket at the end of the week; the whole basket must fit the per-order cap.",
+              }
+            : {}),
         }),
       };
     case "list_wishlist": {
@@ -240,6 +267,14 @@ export async function runAgent(db: DB, rewardId: number, deps: AgentDeps = {}): 
     provider: deps.provider ?? getProvider(settings),
     timeZone: user.timezone,
   };
+  if (row.goal.challengeId != null) {
+    const [c] = await db.select().from(challenges).where(eq(challenges.id, row.goal.challengeId));
+    const w = c?.basketCheckout ? challengeWindow(c, row.activity.startTime, user.timezone) : null;
+    if (c && w) {
+      const lines = (await basketLines(db, c.id, w.startKey, user.timezone)).filter((l) => l.rewardId !== rewardId);
+      ctx.basket = { titles: lines.map((l) => l.item.title), cents: basketTotalCents(lines) };
+    }
+  }
 
   const model = config().ANTHROPIC_MODEL;
   const messages: Anthropic.MessageParam[] = [

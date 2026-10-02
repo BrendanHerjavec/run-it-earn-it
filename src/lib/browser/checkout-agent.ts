@@ -1,9 +1,8 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
-import type { WishlistItem } from "@/db/schema";
 import type { CreateMessage } from "../agent";
 import { formatCad } from "../format";
-import type { Buyer, CheckoutStatus, CheckoutStep } from "../providers/types";
+import type { Buyer, CheckoutLine, CheckoutStatus, CheckoutStep } from "../providers/types";
 import {
   CONFIRMATION_RE,
   looksLikeCardNumber,
@@ -74,14 +73,18 @@ const CONTROL_TOOLS: Anthropic.Tool[] = [
   },
 ];
 
-function systemPrompt(item: WishlistItem, buyer: Buyer, maxSpendCents: number, dryRun: boolean, startUrl: string) {
+function systemPrompt(lines: CheckoutLine[], buyer: Buyer, maxSpendCents: number, dryRun: boolean, startUrl: string) {
+  const item = lines[0].item;
   const atCheckout = startUrl !== item.productUrl;
-  return `You are a careful checkout agent operating the runner's own Chrome window, which is already signed in to the store with their address and card saved. Buy exactly ONE of this item:
+  const order = lines
+    .map((l) => `- ${l.qty} × ${l.item.title} (${l.item.productUrl})${l.item.notes ? `, notes: ${l.item.notes}` : ""}`)
+    .join("\n");
+  return `You are a careful checkout agent operating the runner's own Chrome window, which is already signed in to the store with their address and card saved. Buy exactly this order, nothing more:
 
-Item: ${item.title}
+${order}
 Product page: ${item.productUrl}${atCheckout ? `
-You start on the store's own checkout link (${startUrl}): the item is already in the cart and the shipping address is prefilled. Don't go back to the product page unless the checkout is broken.` : ""}
-Notes (size, flavour, etc.): ${item.notes || "none"}
+You start on the store's own checkout link (${startUrl}): everything above is already in the cart and the shipping address is prefilled. Don't go back to the product page unless the checkout is broken.` : ""}
+Check the cart matches the order list exactly (items and quantities).
 Ship to: ${buyer.name}, ${buyer.city}, ${buyer.province} ${buyer.postalCode}, ${buyer.country} (use the saved address that matches)
 Hard spending limit: ${formatCad(maxSpendCents)} total including tax and shipping.
 ${dryRun ? "\nThis is a DRY RUN: go all the way to the final review page and call ready_to_place_order, but you will not be allowed to place the order.\n" : ""}
@@ -89,7 +92,7 @@ How to work:
 - Use browser_snapshot to read the page; click and type using the element refs it gives you. Take a fresh snapshot after anything that changes the page.
 - Call progress at each phase (opening the product, choosing options, adding to cart, checkout, shipping, review).
 - Stay on this store's website.
-- Quantity 1. Pick the cheapest standard shipping. Decline warranties, subscriptions, donations, tips and upsells. Don't apply random coupons.
+- Exactly the quantities listed. Pick the cheapest standard shipping (or free shipping if offered). Decline warranties, subscriptions, donations, tips and upsells. Don't apply random coupons.
 - Use the saved address and saved payment method. Never type a password, card number, security code or verification code. If the store asks you to sign in, verify, solve a captcha or enter card details, call stop with needs_user=true.
 - If the item is unavailable, the option in the notes doesn't exist, or the total would exceed the limit, call stop with needs_user=false and say why.
 - On the final review page, call ready_to_place_order with the exact total. Only click the place-order button after it says you may, click it once, wait for the confirmation page, then call order_placed.`;
@@ -101,7 +104,7 @@ export type CheckoutRunOptions = {
   mcp: BrowserMcp;
   createMessage: CreateMessage;
   model: string;
-  item: WishlistItem;
+  lines: CheckoutLine[];
   buyer: Buyer;
   maxSpendCents: number;
   dryRun: boolean;
@@ -203,7 +206,7 @@ export async function runBrowserCheckout(o: CheckoutRunOptions): Promise<Checkou
         }
         if (!/^CAD$/i.test(r.data.currency.trim())) problems.push(`currency must be CAD, got ${r.data.currency}`);
         if (!pageShowsPostalCode(page, o.buyer.postalCode)) problems.push(`the page doesn't show the shipping postal code ${o.buyer.postalCode}; make sure the saved home address is selected`);
-        if (currentUrl && !onSameStore(currentUrl, o.item.productUrl)) problems.push("the review page isn't on the store's website");
+        if (currentUrl && !onSameStore(currentUrl, o.lines[0].item.productUrl)) problems.push("the review page isn't on the store's website");
         if (problems.length) {
           if (cents != null && cents > o.maxSpendCents) {
             return [problems.join("; "), true, finish({ state: "failed", step: "Stopped: total over the limit", failureReason: problems.join("; ") })];
@@ -221,7 +224,7 @@ export async function runBrowserCheckout(o: CheckoutRunOptions): Promise<Checkou
               step: "Dry run: stopped before placing the order",
               totalCents: cents!,
               currency: "CAD",
-              receipt: { dryRun: true, merchant: storeDomain(o.item.productUrl), totalCents: cents, currency: "CAD", summary: r.data.summary },
+              receipt: { dryRun: true, merchant: storeDomain(o.lines[0].item.productUrl), totalCents: cents, currency: "CAD", summary: r.data.summary },
             }),
           ];
         }
@@ -245,7 +248,7 @@ export async function runBrowserCheckout(o: CheckoutRunOptions): Promise<Checkou
             totalCents: verifiedCents ?? undefined,
             currency: "CAD",
             merchantOrderId: orderNo || undefined,
-            receipt: { merchant: storeDomain(o.item.productUrl), orderId: orderNo || null, totalCents: verifiedCents, currency: "CAD" },
+            receipt: { merchant: storeDomain(o.lines[0].item.productUrl), orderId: orderNo || null, totalCents: verifiedCents, currency: "CAD" },
           }),
         ];
       }
@@ -258,7 +261,7 @@ export async function runBrowserCheckout(o: CheckoutRunOptions): Promise<Checkou
     const isPlaceOrder = PLACE_ORDER_RE.test(element);
     if (name === "browser_navigate") {
       const url = String(input.url ?? "");
-      if (!onSameStore(url, o.item.productUrl)) return [`Blocked: ${url} is not on ${storeDomain(o.item.productUrl)}. Stay on the store.`, true];
+      if (!onSameStore(url, o.lines[0].item.productUrl)) return [`Blocked: ${url} is not on ${storeDomain(o.lines[0].item.productUrl)}. Stay on the store.`, true];
     }
     if (name === "browser_type" || name === "browser_select_option") {
       const text = String(input.text ?? input.values ?? "");
@@ -286,7 +289,7 @@ export async function runBrowserCheckout(o: CheckoutRunOptions): Promise<Checkou
     return [text || "ok", !!(res as { isError?: boolean }).isError];
   }
 
-  const startUrl = o.startUrl ?? o.item.productUrl;
+  const startUrl = o.startUrl ?? o.lines[0].item.productUrl;
   const messages: Anthropic.MessageParam[] = [{ role: "user", content: `Start by opening ${startUrl}` }];
   const maxTurns = o.maxTurns ?? 60;
   try {
@@ -296,7 +299,7 @@ export async function runBrowserCheckout(o: CheckoutRunOptions): Promise<Checkou
       const res = await o.createMessage({
         model: o.model,
         max_tokens: 8000,
-        system: systemPrompt(o.item, o.buyer, o.maxSpendCents, o.dryRun, startUrl),
+        system: systemPrompt(o.lines, o.buyer, o.maxSpendCents, o.dryRun, startUrl),
         tools,
         messages,
       });

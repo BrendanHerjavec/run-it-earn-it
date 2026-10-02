@@ -23,6 +23,7 @@ export type LogInput = {
   data?: unknown;
   rewardEventId?: number | null;
   activityId?: number | null;
+  orderId?: number | null;
 };
 
 /** Append to the audit log. Never throws: logging must not break the pipeline. */
@@ -34,6 +35,7 @@ export async function logEvent(db: DB, e: LogInput): Promise<void> {
       data: e.data === undefined ? null : redact(e.data),
       rewardEventId: e.rewardEventId ?? null,
       activityId: e.activityId ?? null,
+      orderId: e.orderId ?? null,
     });
   } catch (err) {
     console.error("[event-log] failed to write", e.kind, err);

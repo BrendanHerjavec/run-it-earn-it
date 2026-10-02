@@ -1,12 +1,11 @@
 import Anthropic from "@anthropic-ai/sdk";
-import type { WishlistItem } from "@/db/schema";
 import type { CreateMessage } from "../agent";
 import { runBrowserCheckout } from "../browser/checkout-agent";
 import { getBrowser, type BrowserMcp } from "../browser/session";
 import { amazonAsin, buildCartLink } from "./cart";
 import { anthropicClient } from "../anthropic";
 import { config } from "../config";
-import type { Buyer, CheckoutProvider, CheckoutStatus, Quote } from "./types";
+import { linesLabel, linesTotalCents, type Buyer, type CheckoutLine, type CheckoutProvider, type CheckoutStatus, type Quote } from "./types";
 
 type Run = {
   status: CheckoutStatus;
@@ -37,29 +36,31 @@ export class BrowserProvider implements CheckoutProvider {
   constructor(private readonly opts: BrowserProviderOptions) {}
 
   /** A browser can't know tax and shipping until checkout; estimate with 13% HST. */
-  async quote(item: WishlistItem): Promise<Quote> {
-    const taxCents = Math.round(item.expectedPriceCents * HST);
+  async quote(lines: CheckoutLine[]): Promise<Quote> {
+    const itemCents = linesTotalCents(lines);
+    const taxCents = Math.round(itemCents * HST);
     return {
-      itemCents: item.expectedPriceCents,
+      itemCents,
       taxCents,
       shippingCents: 0,
-      totalCents: item.expectedPriceCents + taxCents,
+      totalCents: itemCents + taxCents,
       currency: "CAD",
       exact: false,
       note: "Estimate: expected price + 13% HST; the agent reads the real total at checkout",
     };
   }
 
-  async start(item: WishlistItem, buyer: Buyer, maxSpendCents: number) {
+  async start(lines: CheckoutLine[], buyer: Buyer, maxSpendCents: number) {
+    const item = lines[0].item;
     for (const r of runs.values()) {
       if (r.status.state === "running" || r.status.state === "awaiting_input") throw new Error("Another browser checkout is already running");
     }
     // Amazon's terms forbid shopping agents; never drive it (cart links still work).
-    if (amazonAsin(item.productUrl)) throw new Error("Amazon doesn't allow shopping agents. Use the cart-link checkout for Amazon items.");
+    if (lines.some((l) => amazonAsin(l.item.productUrl))) throw new Error("Amazon doesn't allow shopping agents. Use the cart-link checkout for Amazon items.");
     // Start from the store's own checkout link when it has one (Shopify): the agent
     // then only walks the checkout instead of navigating product pages.
-    const link = await buildCartLink(item, buyer, this.opts.fetch);
-    if (link.available === false) throw new Error(`${item.title} is out of stock in that option`);
+    const link = await buildCartLink(lines, buyer, this.opts.fetch);
+    if (link.available === false) throw new Error(`Out of stock in that option: ${linesLabel(lines)}`);
     const startUrl = link.kind === "shopify_checkout" ? link.url : item.productUrl;
     const runId = `browser_${Date.now()}`;
     const run: Run = { status: { state: "running", step: "Starting", steps: [] }, cancelled: false };
@@ -80,7 +81,7 @@ export class BrowserProvider implements CheckoutProvider {
           mcp,
           createMessage,
           model: config().BROWSER_AGENT_MODEL,
-          item,
+          lines,
           startUrl,
           buyer,
           maxSpendCents,

@@ -1,6 +1,6 @@
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { DB } from "@/db";
-import { activities, rewardEvents, spendLedger, wishlistItems, type RewardEvent, type RewardStatus } from "@/db/schema";
+import { activities, challenges, goals, rewardEvents, spendLedger, wishlistItems, type RewardEvent, type RewardStatus } from "@/db/schema";
 import { runAgent, type AgentDeps } from "./agent";
 import { approvalUrls, burnApprovalToken, issueApprovalToken, rewardPageUrl } from "./approval";
 import { config } from "./config";
@@ -8,6 +8,7 @@ import { logEvent } from "./events";
 import { formatCad, formatKm } from "./format";
 import { notify } from "./notify";
 import { buyerFromUser, getProvider, providerByName, TERMINAL, type CheckoutProvider, type CheckoutStatus } from "./providers";
+import { CapError, ESTIMATE_BUFFER, QUOTE_BUFFER } from "./checkout-shared";
 import { getEffectiveSettings, getUser } from "./settings";
 import { budgetStatus } from "./stats";
 
@@ -17,10 +18,6 @@ export type RewardDeps = AgentDeps & {
   sleep?: (ms: number) => Promise<void>;
 };
 
-/** Headroom above the quote for price changes at checkout, still bounded by the caps. */
-const QUOTE_BUFFER = 1.1;
-/** Estimated quotes (browser agent: shipping unknown until checkout) get more room. */
-const ESTIMATE_BUFFER = 1.25;
 
 export type ApproveVia = "notification" | "dashboard" | "auto" | "sync";
 
@@ -88,11 +85,40 @@ export async function runRewardAgent(db: DB, id: number, deps: RewardDeps = {}):
   await afterChoice(db, id, deps);
 }
 
+async function isBasketGoal(db: DB, goalId: number): Promise<boolean> {
+  const [row] = await db
+    .select({ basket: challenges.basketCheckout })
+    .from(goals)
+    .innerJoin(challenges, eq(goals.challengeId, challenges.id))
+    .where(eq(goals.id, goalId));
+  return !!row?.basket;
+}
+
 async function afterChoice(db: DB, id: number, deps: RewardDeps) {
   const settings = await getEffectiveSettings(db);
   const row = await load(db, id);
   if (!row?.item) return;
   const quoted = row.event.quotedTotalCents ?? row.item.expectedPriceCents;
+
+  // Basket challenges: the pick goes into this window's basket; one order is placed when the window ends.
+  if (row.event.goalId != null && (await isBasketGoal(db, row.event.goalId))) {
+    const moved = await transition(db, id, ["pending_agent"], "in_basket", {}, "added to the basket");
+    if (moved) {
+      await notify(
+        db,
+        {
+          title: `🏃 ${formatKm(row.activity.distanceM)} done. Reward unlocked!`,
+          message: `Into the basket: ${row.item.title} (${formatCad(row.item.expectedPriceCents)})
+
+"${row.event.agentMessage}"`,
+          tags: ["shopping_cart"],
+          click: rewardPageUrl(id),
+        },
+        { rewardEventId: id },
+      );
+    }
+    return;
+  }
 
   // "Sync runs": clicking Sync was the consent. Buy after a short, cancellable countdown.
   if (row.event.autoApprove) {
@@ -175,7 +201,7 @@ export async function approveReward(db: DB, id: number, via: ApproveVia, deps: R
       const tx = txRaw as unknown as DB;
       await tx.execute(sql`select pg_advisory_xact_lock(424242)`);
       const budget = await budgetStatus(tx, settings, new Date(), user.timezone);
-      const quote = await provider.quote(item, buyer);
+      const quote = await provider.quote([{ item, qty: 1 }], buyer);
       const cap = Math.min(budget.availableForNextOrderCents, via === "auto" ? settings.autoBuyMaxCents : Infinity);
       if (quote.totalCents > cap) {
         throw new CapError(`Quoted total ${formatCad(quote.totalCents)} is over the ${formatCad(cap)} you have left`);
@@ -199,7 +225,7 @@ export async function approveReward(db: DB, id: number, via: ApproveVia, deps: R
   const started = await transition(db, id, ["approved"], "checking_out", { provider: provider.name, maxSpendCents });
   if (!started) return { ok: false, reason: "Reward changed state during approval" };
   try {
-    const run = await provider.start(item, buyer, maxSpendCents);
+    const run = await provider.start([{ item, qty: 1 }], buyer, maxSpendCents);
     await db
       .update(rewardEvents)
       .set({ providerRunId: run.runId, liveViewUrl: run.liveViewUrl ?? null })
@@ -224,7 +250,6 @@ export async function approveReward(db: DB, id: number, via: ApproveVia, deps: R
   return { ok: true };
 }
 
-class CapError extends Error {}
 
 export async function skipReward(db: DB, id: number, via: "notification" | "dashboard"): Promise<boolean> {
   const row = await transition(db, id, ["awaiting_approval"], "rejected", { completedAt: new Date() }, `skipped via ${via}`);

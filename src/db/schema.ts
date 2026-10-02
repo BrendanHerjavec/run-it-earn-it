@@ -24,7 +24,11 @@ export const rewardStatusEnum = pgEnum("reward_status", [
   "failed",
   "rejected",
   "skipped_budget",
+  /** Chosen and waiting in the challenge's basket for the end-of-window order. */
+  "in_basket",
 ]);
+
+export const orderStatusEnum = pgEnum("order_status", ["awaiting_approval", "checking_out", "completed", "failed", "rejected"]);
 
 const timestamps = {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -92,6 +96,8 @@ export const challenges = pgTable("challenges", {
   lengthDays: integer("length_days").notNull().default(7),
   /** Start a fresh window every lengthDays after the first one ends. */
   repeats: boolean("repeats").notNull().default(false),
+  /** Milestone rewards collect in a basket and are bought as ONE order when the window ends. */
+  basketCheckout: boolean("basket_checkout").notNull().default(false),
   active: boolean("active").notNull().default(true),
   ...timestamps,
 });
@@ -107,6 +113,8 @@ export const goals = pgTable("goals", {
   rewardTier: tierEnum("reward_tier").notNull().default("small"),
   /** Milestone of a challenge (weekly_distance goals only); its window comes from the challenge. */
   challengeId: integer("challenge_id").references(() => challenges.id),
+  /** Milestone price limit for Claude's pick (overrides the tier band), e.g. 40_00 for "up to a $40 bag". */
+  maxPriceCents: integer("max_price_cents"),
   /** Optional fixed reward: Claude must pick this item instead of choosing within the tier. */
   rewardItemId: integer("reward_item_id").references(() => wishlistItems.id),
   active: boolean("active").notNull().default(true),
@@ -172,6 +180,8 @@ export const rewardEvents = pgTable(
     totalChargedCents: integer("total_charged_cents"),
     receipt: jsonb("receipt"),
     failureReason: text("failure_reason"),
+    /** Set when this (in_basket) reward was bought as part of a combined basket order. */
+    orderId: integer("order_id"),
     approvalTokenHash: text("approval_token_hash"),
     approvalTokenExpiresAt: timestamp("approval_token_expires_at", { withTimezone: true }),
     approvalTokenUsedAt: timestamp("approval_token_used_at", { withTimezone: true }),
@@ -201,13 +211,45 @@ export const spendLedger = pgTable("spend_ledger", {
   currency: text("currency").notNull().default("CAD"),
   /** Unique so a reward can only ever be charged to the ledger once. */
   rewardEventId: integer("reward_event_id")
-    .notNull()
     .unique()
     .references(() => rewardEvents.id),
+  /** …or a combined basket order (exactly one of the two is set). */
+  orderId: integer("order_id")
+    .unique()
+    .references(() => orders.id),
   /** "reserved" while a checkout is in flight, "settled" once charged, "released" if it failed. */
   kind: text("kind").$type<"reserved" | "settled" | "released">().notNull().default("reserved"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+/**
+ * A combined end-of-window order: every in_basket reward of one challenge
+ * window, checked out together (e.g. three bags → free shipping).
+ */
+export const orders = pgTable(
+  "orders",
+  {
+    id: serial("id").primaryKey(),
+    challengeId: integer("challenge_id")
+      .notNull()
+      .references(() => challenges.id),
+    /** Window start "YYYY-MM-DD": one order per challenge window. */
+    windowStartKey: text("window_start_key").notNull(),
+    status: orderStatusEnum("status").notNull().default("awaiting_approval"),
+    autoApproveAt: timestamp("auto_approve_at", { withTimezone: true }),
+    provider: text("provider"),
+    providerRunId: text("provider_run_id"),
+    quotedTotalCents: integer("quoted_total_cents"),
+    maxSpendCents: integer("max_spend_cents"),
+    totalChargedCents: integer("total_charged_cents"),
+    checkoutState: jsonb("checkout_state"),
+    receipt: jsonb("receipt"),
+    failureReason: text("failure_reason"),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (t) => [uniqueIndex("orders_challenge_window_uq").on(t.challengeId, t.windowStartKey)],
+);
 
 /** Append-only audit log: agent tool calls, provider requests/responses (redacted), state changes. */
 export const eventLog = pgTable(
@@ -216,12 +258,13 @@ export const eventLog = pgTable(
     id: serial("id").primaryKey(),
     rewardEventId: integer("reward_event_id"),
     activityId: integer("activity_id"),
+    orderId: integer("order_id"),
     kind: text("kind").notNull(),
     message: text("message").notNull().default(""),
     data: jsonb("data"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index("event_log_reward_idx").on(t.rewardEventId)],
+  (t) => [index("event_log_reward_idx").on(t.rewardEventId), index("event_log_order_idx").on(t.orderId)],
 );
 
 /**
@@ -241,6 +284,7 @@ export type User = typeof users.$inferSelect;
 export type Settings = typeof settings.$inferSelect;
 export type Goal = typeof goals.$inferSelect;
 export type Challenge = typeof challenges.$inferSelect;
+export type Order = typeof orders.$inferSelect;
 export type WishlistItem = typeof wishlistItems.$inferSelect;
 export type Activity = typeof activities.$inferSelect;
 export type RewardEvent = typeof rewardEvents.$inferSelect;

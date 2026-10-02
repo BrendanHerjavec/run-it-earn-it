@@ -154,9 +154,12 @@ export async function processActivity(db: DB, activity: Activity, deps: Pipeline
   const skipped: { id: number; reason: string }[] = [];
   for (const hit of selected) {
     const tierIdx = TIERS.indexOf(hit.goal.rewardTier);
+    const maxPrice = hit.goal.maxPriceCents;
     const candidates = hit.goal.rewardItemId
       ? items.filter((i) => i.id === hit.goal.rewardItemId)
-      : items.filter((i) => TIERS.indexOf(i.tier) <= tierIdx && i.expectedPriceCents <= TIER_MAX_CENTS[hit.goal.rewardTier]);
+      : maxPrice != null
+        ? items.filter((i) => i.expectedPriceCents <= maxPrice)
+        : items.filter((i) => TIERS.indexOf(i.tier) <= tierIdx && i.expectedPriceCents <= TIER_MAX_CENTS[hit.goal.rewardTier]);
     const cheapest = Math.min(...candidates.map((i) => withTax(i.expectedPriceCents)));
     const available = availableNow();
     const fits = Number.isFinite(cheapest) && cheapest <= available;

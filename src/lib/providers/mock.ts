@@ -1,5 +1,4 @@
-import type { WishlistItem } from "@/db/schema";
-import type { Buyer, CheckoutProvider, CheckoutStatus, Quote } from "./types";
+import { linesTotalCents, type Buyer, type CheckoutLine, type CheckoutProvider, type CheckoutStatus, type Quote } from "./types";
 
 /** Ontario HST. The mock quotes like a Canadian store with free shipping. */
 const HST = 0.13;
@@ -26,23 +25,24 @@ export class MockProvider implements CheckoutProvider {
   readonly name = "mock" as const;
   constructor(private readonly now: () => number = Date.now) {}
 
-  async quote(item: WishlistItem): Promise<Quote> {
-    const taxCents = Math.round(item.expectedPriceCents * HST);
+  async quote(lines: CheckoutLine[]): Promise<Quote> {
+    const itemCents = linesTotalCents(lines);
+    const taxCents = Math.round(itemCents * HST);
     return {
-      itemCents: item.expectedPriceCents,
+      itemCents,
       taxCents,
       shippingCents: 0,
-      totalCents: item.expectedPriceCents + taxCents,
+      totalCents: itemCents + taxCents,
       currency: "CAD",
       exact: true,
       note: "Mock quote: 13% HST, free shipping",
     };
   }
 
-  async start(item: WishlistItem, _buyer: Buyer, maxSpendCents: number) {
+  async start(lines: CheckoutLine[], _buyer: Buyer, maxSpendCents: number) {
     const start = this.now();
     const duration = 20_000 + Math.floor(Math.random() * 20_000);
-    return { runId: `mock_${start}_${duration}_${item.expectedPriceCents}_${maxSpendCents}` };
+    return { runId: `mock_${start}_${duration}_${linesTotalCents(lines)}_${maxSpendCents}` };
   }
 
   async status(runId: string): Promise<CheckoutStatus> {

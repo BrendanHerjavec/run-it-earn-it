@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import type { WishlistItem } from "@/db/schema";
-import type { Buyer, CheckoutProvider, CheckoutStatus, Quote } from "./types";
+import { linesLabel, linesTotalCents, type Buyer, type CheckoutLine, type CheckoutProvider, type CheckoutStatus, type Quote } from "./types";
 
 /**
  * Terms-safe checkout: nothing automates the store. The app builds the store's
@@ -64,7 +64,9 @@ export function pickVariant(product: ShopifyProduct, productUrl: string, notes: 
 
 const COUNTRY_NAMES: Record<string, string> = { CA: "Canada", US: "United States" };
 
-export function shopifyPermalink(origin: string, variantId: number, buyer: Buyer): string {
+/** Cart permalink for one or more variants: /cart/ID:QTY[,ID:QTY…] */
+export function shopifyPermalink(origin: string, variants: number | { id: number; qty: number }[], buyer: Buyer): string {
+  const list = typeof variants === "number" ? [{ id: variants, qty: 1 }] : variants;
   const [first, ...rest] = buyer.name.trim().split(/\s+/);
   const q = new URLSearchParams();
   if (buyer.email) q.set("checkout[email]", buyer.email);
@@ -80,48 +82,67 @@ export function shopifyPermalink(origin: string, variantId: number, buyer: Buyer
   };
   for (const [k, v] of Object.entries(addr)) if (v) q.set(`checkout[shipping_address][${k}]`, v);
   const qs = q.toString();
-  return `${origin}/cart/${variantId}:1${qs ? `?${qs}` : ""}`;
+  return `${origin}/cart/${list.map((v) => `${v.id}:${v.qty}`).join(",")}${qs ? `?${qs}` : ""}`;
 }
 
 type Fetch = typeof fetch;
 
-export async function buildCartLink(item: WishlistItem, buyer: Buyer, fetchImpl: Fetch = fetch): Promise<CartLink> {
-  const asin = amazonAsin(item.productUrl);
-  if (asin) {
-    const host = new URL(item.productUrl).hostname.replace(/^(?!www\.)/, "www.");
-    return {
-      kind: "amazon_cart",
-      url: `https://${host}/gp/aws/cart/add.html?ASIN.1=${asin}&Quantity.1=1`,
-      note: "Amazon's add-to-cart page: confirm the cart, then check out",
-    };
+type Resolved = { origin: string; variant: ShopifyVariant; product: ShopifyProduct } | { problem: string };
+
+async function resolveShopify(item: WishlistItem, fetchImpl: Fetch): Promise<Resolved | null> {
+  const handle = shopifyHandle(item.productUrl);
+  if (!handle) return null;
+  const origin = new URL(item.productUrl).origin;
+  try {
+    const res = await fetchImpl(`${origin}/products/${handle}.js`, { headers: { Accept: "application/json" }, cache: "no-store" });
+    if (!res.ok) return null;
+    const product = (await res.json()) as ShopifyProduct;
+    if (!Array.isArray(product?.variants)) return null;
+    const variant = pickVariant(product, item.productUrl, item.notes);
+    return variant ? { origin, variant, product } : { problem: `Pick the option for ${item.title} (${item.notes || "see notes"})` };
+  } catch {
+    // Not a Shopify store after all (or offline).
+    return null;
+  }
+}
+
+/**
+ * The store's own cart link for an order of one or more lines. Several lines
+ * become one cart (one Shopify permalink, or one Amazon add-to-cart page) when
+ * they're all from the same store.
+ */
+export async function buildCartLink(lines: CheckoutLine[] | WishlistItem, buyer: Buyer, fetchImpl: Fetch = fetch): Promise<CartLink> {
+  const list: CheckoutLine[] = Array.isArray(lines) ? lines : [{ item: lines, qty: 1 }];
+  const first = list[0].item;
+  const manual = (note: string): CartLink => ({ kind: "product_page", url: first.productUrl, note });
+
+  const asins = list.map((l) => amazonAsin(l.item.productUrl));
+  if (asins.every(Boolean)) {
+    const host = new URL(first.productUrl).hostname.replace(/^(?!www.)/, "www.");
+    const q = list.map((l, i) => `ASIN.${i + 1}=${asins[i]}&Quantity.${i + 1}=${l.qty}`).join("&");
+    return { kind: "amazon_cart", url: `https://${host}/gp/aws/cart/add.html?${q}`, note: "Amazon's add-to-cart page: confirm the cart, then check out" };
   }
 
-  const handle = shopifyHandle(item.productUrl);
-  if (handle) {
-    const origin = new URL(item.productUrl).origin;
-    try {
-      const res = await fetchImpl(`${origin}/products/${handle}.js`, { headers: { Accept: "application/json" }, cache: "no-store" });
-      if (res.ok) {
-        const product = (await res.json()) as ShopifyProduct;
-        if (Array.isArray(product?.variants)) {
-          const v = pickVariant(product, item.productUrl, item.notes);
-          if (v) {
-            return {
-              kind: "shopify_checkout",
-              url: shopifyPermalink(origin, v.id, buyer),
-              note: `${v.title === "Default Title" ? product.title : `${product.title}: ${v.title}`}, address prefilled`,
-              itemCents: v.price,
-              available: v.available,
-            };
-          }
-          return { kind: "product_page", url: item.productUrl, note: `Pick the option (${item.notes || "see notes"}), add to cart and check out` };
-        }
-      }
-    } catch {
-      // Not a Shopify store after all (or offline): fall through to the product page.
-    }
+  const origins = new Set(list.map((l) => new URL(l.item.productUrl).origin));
+  const resolved = origins.size === 1 ? await Promise.all(list.map((l) => resolveShopify(l.item, fetchImpl))) : [];
+  if (resolved.length && resolved.every((r) => r && "variant" in r)) {
+    const ok = resolved as Extract<Resolved, { variant: ShopifyVariant }>[];
+    const names = ok.map(({ product, variant }, i) => {
+      const name = variant.title === "Default Title" ? product.title : `${product.title}: ${variant.title}`;
+      return list[i].qty > 1 ? `${list[i].qty} × ${name}` : name;
+    });
+    return {
+      kind: "shopify_checkout",
+      url: shopifyPermalink(ok[0].origin, ok.map((r, i) => ({ id: r.variant.id, qty: list[i].qty })), buyer),
+      note: `${names.join(" + ")}, address prefilled`,
+      itemCents: ok.reduce((sum, r, i) => sum + r.variant.price * list[i].qty, 0),
+      available: ok.every((r) => r.variant.available),
+    };
   }
-  return { kind: "product_page", url: item.productUrl, note: `Add to cart${item.notes ? ` (${item.notes})` : ""} and check out` };
+  const problem = resolved.find((r): r is { problem: string } => !!r && "problem" in r);
+  if (problem) return manual(`${problem.problem}, add to cart and check out`);
+  if (list.length > 1) return manual(`Add these to one cart and check out: ${list.map((l) => l.item.title).join(", ")}`);
+  return manual(`Add to cart${first.notes ? ` (${first.notes})` : ""} and check out`);
 }
 
 /** Open a URL in the user's default browser (this app runs on their own machine). */
@@ -145,9 +166,9 @@ export class CartLinkProvider implements CheckoutProvider {
   readonly name = "cart" as const;
   constructor(private readonly opts: { fetch?: Fetch; open?: (url: string) => void } = {}) {}
 
-  async quote(item: WishlistItem, buyer: Buyer): Promise<Quote> {
-    const link = await buildCartLink(item, buyer, this.opts.fetch);
-    const itemCents = link.itemCents ?? item.expectedPriceCents;
+  async quote(lines: CheckoutLine[], buyer: Buyer): Promise<Quote> {
+    const link = await buildCartLink(lines, buyer, this.opts.fetch);
+    const itemCents = link.itemCents ?? linesTotalCents(lines);
     const taxCents = Math.round(itemCents * HST);
     return {
       itemCents,
@@ -160,9 +181,9 @@ export class CartLinkProvider implements CheckoutProvider {
     };
   }
 
-  async start(item: WishlistItem, buyer: Buyer, maxSpendCents: number) {
-    const link = await buildCartLink(item, buyer, this.opts.fetch);
-    if (link.available === false) throw new Error(`${item.title} is out of stock in that option`);
+  async start(lines: CheckoutLine[], buyer: Buyer, maxSpendCents: number) {
+    const link = await buildCartLink(lines, buyer, this.opts.fetch);
+    if (link.available === false) throw new Error(`Out of stock in that option: ${linesLabel(lines)}`);
     const runId = `cart_${Date.now()}`;
     const steps = [
       { label: link.kind === "shopify_checkout" ? "Built the store's checkout link" : link.kind === "amazon_cart" ? "Built Amazon's add-to-cart link" : "Found the product page", at: new Date().toISOString() },

@@ -5,7 +5,9 @@ import { SESSION_COOKIE, verifySessionToken } from "@/lib/auth";
 import { config } from "@/lib/config";
 import { syncCoros } from "@/lib/coros-sync";
 import { logEvent } from "@/lib/events";
-import { pipelineDeps } from "@/lib/pipeline-deps";
+import { pipelineDeps, queueBasketOrders } from "@/lib/pipeline-deps";
+import { dueBaskets } from "@/lib/basket";
+import { getUser } from "@/lib/settings";
 
 // New rewards run the agent in after(); give it room on Vercel.
 export const maxDuration = 300;
@@ -32,7 +34,14 @@ async function handle(req: NextRequest) {
   try {
     const autoApprove = loggedIn && req.nextUrl.searchParams.get("autobuy") === "1";
     const result = await syncCoros(db, pipelineDeps({ autoApprove }));
-    return NextResponse.json(result);
+    // A Sync after a basket challenge's week has ended also places that week's order.
+    let basketOrders = 0;
+    if (autoApprove) {
+      const due = await dueBaskets(db, new Date(), (await getUser(db)).timezone);
+      queueBasketOrders(db, due);
+      basketOrders = due.length;
+    }
+    return NextResponse.json({ ...result, basketOrders });
   } catch (err) {
     await logEvent(db, { kind: "coros.sync_failed", message: String(err) });
     return NextResponse.json({ error: String(err) }, { status: 502 });
