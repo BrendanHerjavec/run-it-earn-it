@@ -3,6 +3,7 @@ import type { WishlistItem } from "@/db/schema";
 import type { CreateMessage } from "../agent";
 import { runBrowserCheckout } from "../browser/checkout-agent";
 import { getBrowser, type BrowserMcp } from "../browser/session";
+import { amazonAsin, buildCartLink } from "./cart";
 import { anthropicClient } from "../anthropic";
 import { config } from "../config";
 import type { Buyer, CheckoutProvider, CheckoutStatus, Quote } from "./types";
@@ -22,6 +23,7 @@ const HST = 0.13;
 export type BrowserProviderOptions = {
   dryRun: boolean;
   connect?: () => Promise<BrowserMcp>;
+  fetch?: typeof fetch;
   createMessage?: CreateMessage;
 };
 
@@ -52,6 +54,13 @@ export class BrowserProvider implements CheckoutProvider {
     for (const r of runs.values()) {
       if (r.status.state === "running" || r.status.state === "awaiting_input") throw new Error("Another browser checkout is already running");
     }
+    // Amazon's terms forbid shopping agents; never drive it (cart links still work).
+    if (amazonAsin(item.productUrl)) throw new Error("Amazon doesn't allow shopping agents. Use the cart-link checkout for Amazon items.");
+    // Start from the store's own checkout link when it has one (Shopify): the agent
+    // then only walks the checkout instead of navigating product pages.
+    const link = await buildCartLink(item, buyer, this.opts.fetch);
+    if (link.available === false) throw new Error(`${item.title} is out of stock in that option`);
+    const startUrl = link.kind === "shopify_checkout" ? link.url : item.productUrl;
     const runId = `browser_${Date.now()}`;
     const run: Run = { status: { state: "running", step: "Starting", steps: [] }, cancelled: false };
     runs.set(runId, run);
@@ -72,6 +81,7 @@ export class BrowserProvider implements CheckoutProvider {
           createMessage,
           model: config().BROWSER_AGENT_MODEL,
           item,
+          startUrl,
           buyer,
           maxSpendCents,
           dryRun: this.opts.dryRun,

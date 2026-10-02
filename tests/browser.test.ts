@@ -188,3 +188,32 @@ describe("browser checkout agent", () => {
     expect(browser.calls.filter((c) => c.name !== "browser_snapshot")).toEqual([]);
   });
 });
+
+describe("browser provider start", () => {
+  const SHOPIFY = { title: "Sock", handle: "run-sock", variants: [{ id: 222, title: "L", available: true, price: 800 }] };
+  const shopItem = { ...item, productUrl: "https://www.runners.ca/products/run-sock" } as WishlistItem;
+
+  it("starts the agent on the store's checkout link (item in cart, address prefilled)", async () => {
+    const { BrowserProvider } = await import("@/lib/providers/browser");
+    const b = fakeBrowser({ review: REVIEW });
+    const p = new BrowserProvider({
+      dryRun: true,
+      connect: async () => b.mcp,
+      fetch: (async () => new Response(JSON.stringify(SHOPIFY))) as typeof fetch,
+      createMessage: scriptedClaude([
+        [toolUse("browser_navigate", { url: "https://www.runners.ca/cart/222:1" })],
+        [toolUse("stop", { reason: "test", needs_user: false })],
+      ]).createMessage,
+    });
+    const { runId } = await p.start(shopItem, buyer, 20_00);
+    for (let i = 0; i < 50 && (await p.status(runId)).state === "running"; i++) await new Promise((r) => setTimeout(r, 10));
+    expect(b.calls[0]).toMatchObject({ name: "browser_navigate" });
+    expect(String(b.calls[0].args.url)).toMatch(/^https:\/\/www\.runners\.ca\/cart\/222:1/);
+  });
+
+  it("refuses to drive Amazon", async () => {
+    const { BrowserProvider } = await import("@/lib/providers/browser");
+    const p = new BrowserProvider({ dryRun: true, connect: async () => fakeBrowser({ review: REVIEW }).mcp });
+    await expect(p.start({ ...item, productUrl: "https://www.amazon.ca/dp/B0ABCDEF12" } as WishlistItem, buyer, 20_00)).rejects.toThrow(/Amazon/);
+  });
+});

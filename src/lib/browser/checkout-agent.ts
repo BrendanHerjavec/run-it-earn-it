@@ -74,11 +74,13 @@ const CONTROL_TOOLS: Anthropic.Tool[] = [
   },
 ];
 
-function systemPrompt(item: WishlistItem, buyer: Buyer, maxSpendCents: number, dryRun: boolean) {
+function systemPrompt(item: WishlistItem, buyer: Buyer, maxSpendCents: number, dryRun: boolean, startUrl: string) {
+  const atCheckout = startUrl !== item.productUrl;
   return `You are a careful checkout agent operating the runner's own Chrome window, which is already signed in to the store with their address and card saved. Buy exactly ONE of this item:
 
 Item: ${item.title}
-Product page: ${item.productUrl}
+Product page: ${item.productUrl}${atCheckout ? `
+You start on the store's own checkout link (${startUrl}): the item is already in the cart and the shipping address is prefilled. Don't go back to the product page unless the checkout is broken.` : ""}
 Notes (size, flavour, etc.): ${item.notes || "none"}
 Ship to: ${buyer.name}, ${buyer.city}, ${buyer.province} ${buyer.postalCode}, ${buyer.country} (use the saved address that matches)
 Hard spending limit: ${formatCad(maxSpendCents)} total including tax and shipping.
@@ -94,6 +96,8 @@ How to work:
 }
 
 export type CheckoutRunOptions = {
+  /** Where to begin: the store's cart/checkout link when we have one, else the product page. */
+  startUrl?: string;
   mcp: BrowserMcp;
   createMessage: CreateMessage;
   model: string;
@@ -282,7 +286,8 @@ export async function runBrowserCheckout(o: CheckoutRunOptions): Promise<Checkou
     return [text || "ok", !!(res as { isError?: boolean }).isError];
   }
 
-  const messages: Anthropic.MessageParam[] = [{ role: "user", content: `Start by opening ${o.item.productUrl}` }];
+  const startUrl = o.startUrl ?? o.item.productUrl;
+  const messages: Anthropic.MessageParam[] = [{ role: "user", content: `Start by opening ${startUrl}` }];
   const maxTurns = o.maxTurns ?? 60;
   try {
     for (let turn = 0; turn < maxTurns; turn++) {
@@ -291,7 +296,7 @@ export async function runBrowserCheckout(o: CheckoutRunOptions): Promise<Checkou
       const res = await o.createMessage({
         model: o.model,
         max_tokens: 8000,
-        system: systemPrompt(o.item, o.buyer, o.maxSpendCents, o.dryRun),
+        system: systemPrompt(o.item, o.buyer, o.maxSpendCents, o.dryRun, startUrl),
         tools,
         messages,
       });
